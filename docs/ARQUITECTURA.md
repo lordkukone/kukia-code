@@ -40,6 +40,11 @@ src-tauri/      crate kukia-code (comandos Tauri, estado, ventana)
 | `logs` | Log de aplicación en `%APPDATA%\KukiaCode\logs\kukia.log` |
 | `radar` | Consulta releases oficiales (GitHub API) y fuentes manuales |
 | `research` | KUKIA EXPERIMENTAL AI RADAR: arXiv, Hugging Face, GitHub, alertas, informes y descarga aislada |
+| `permissions` | Política por agente **y por proyecto**: allowlist, solo-lectura, 17 verbos destructivos, junctions resueltos |
+| `logs` | Log de aplicación, con carpeta aislable (`KUKIA_LOG_DIR`) para que los tests no ensucien el log real |
+| `vram` | Guardia de VRAM: GPUs reales, motores con modelo cargado (Ollama, LM Studio, ComfyUI), aviso de competencia y cálculo de "¿cabe?" |
+| `gaming` | KUKIA Future Gaming Radar: releases, búsqueda GitHub y arXiv, fichas de 23 campos, alertas e informes |
+| `anime_real` | KUKIA ANIME ↔ REAL STUDIO: cliente de ComfyUI, plantillas API, comprobación de modelos y conversión verificada |
 
 ## Flujo de chat
 
@@ -85,6 +90,54 @@ src-tauri/      crate kukia-code (comandos Tauri, estado, ventana)
 - Informe diario en `H:\KUKIA_RESEARCH\AI_EXPERIMENTAL\reports\YYYY-MM-DD.md`.
 - Descarga aislada solo https, máximo 25 MB, a `downloads\`; nunca se ejecuta nada.
 - Vigilancia automática cada 6 h si `research_auto` está activo (solo metadatos).
+
+## Permisos por proyecto (Fase 3A)
+
+- Tabla `projects`: id, nombre, raíz, rutas de lectura/escritura, rutas de solo lectura y los
+  interruptores `allow_write` / `allow_shell` / `allow_network`.
+- El proyecto activo se guarda en `config.json` (`active_project`).
+- Resolución en `permissions::check_scoped` y `check_cwd_in_scope_scoped`:
+  **política del agente Y ámbito del proyecto**. El proyecto recorta, nunca amplía.
+- Se aplica en los mismos cinco puntos que la política del agente: `files_read`, `files_write`,
+  `run_command`, `run_command_stream` y `audit_export`.
+- Comandos `projects_list`, `project_create`, `project_update` (exige aprobación),
+  `project_activate`, `project_active`. UI dentro de la vista **Seguridad**.
+- Detalle en `docs/SEGURIDAD.md`.
+
+## Guardia de VRAM
+
+- `vram::report()` mide GPUs con `nvidia-smi` y consulta **tres** motores: Ollama (`/api/ps`),
+  LM Studio (`/api/v0/models` en 1234 y 1235) y ComfyUI (`/system_stats` en 8188).
+- Avisa de **competencia** cuando hay dos o más motores con modelo cargado a la vez.
+- ComfyUI no publica qué checkpoint tiene: se deduce por VRAM ocupada con umbral de 800 MB,
+  y se dice tal cual en la interfaz.
+- En esta máquina Windows/WDDM `nvidia-smi` devuelve `N/A` en memoria por proceso, así que la
+  vista filtra esas filas y explica por qué se mide por motor.
+- Comandos: `vram_report`, `vram_fits`. Vista: `app/src/views/Vram.tsx`.
+
+## KUKIA Future Gaming Radar
+
+- `gaming::scan_all()` consulta 9 repos (releases), 6 búsquedas de GitHub y 5 términos de arXiv,
+  y **deduplica por id**: el mismo proyecto puede salir en releases y en búsqueda (medido: 3
+  duplicados en un escaneo de 39).
+- Cada descubrimiento es una ficha de 23 campos con estado, licencia, requisitos, riesgos y
+  veredicto por GPU (RTX 5070 / RTX 5060 Ti).
+- Solo lectura: no descarga ejecutables ni toca juegos, drivers o configuraciones.
+- Laboratorio en `H:\KUKIA_RESEARCH\GAMING_GRAPHICS` (8 subcarpetas + informe diario).
+- Comandos: `gaming_scan`, `gaming_items`, `gaming_alerts`, `gaming_report`, `gaming_lab_path`.
+  Vista: `app/src/views/Gaming.tsx`.
+
+## KUKIA ANIME ↔ REAL STUDIO
+
+- Vive en `core/src/anime_real.rs` + `workflows/anime_real/` (workflow API + `manifest.json`).
+- Flujo: `/object_info` para saber qué modelos ve ComfyUI → comprobar los `requiere` de cada
+  plantilla → `POST /prompt` → sondear `/history/{id}` → descargar por `/view` → guardar en
+  `output/anime_real/` y anotar una línea en `historial.jsonl`.
+- El resultado vuelve a la UI como *data URL* (entrada y salida), así el antes/después funciona
+  sin protocolo de assets ni permisos extra de Tauri.
+- Cada conversión queda en `audit_log` (agente `studio`, herramienta `anime_real.convert`).
+- No instala, no descarga modelos y no modifica ComfyUI: solo encola y espera.
+- Detalle completo en `docs/ANIME_REAL.md`.
 
 ## Radar de actualizaciones
 

@@ -14,10 +14,15 @@ import Tools from "./views/Tools";
 import Tasks from "./views/Tasks";
 import Radar from "./views/Radar";
 import Research from "./views/Research";
+import AnimeReal from "./views/AnimeReal";
+import Vram from "./views/Vram";
+import Gaming from "./views/Gaming";
+import Security from "./views/Security";
 
 export type ViewId =
   | "chat" | "models" | "agents" | "files" | "terminal" | "tasks"
-  | "memory" | "tools" | "gpu" | "benchmarks" | "settings" | "history" | "radar" | "research";
+  | "memory" | "tools" | "gpu" | "benchmarks" | "settings" | "history" | "radar"
+  | "research" | "security" | "anime" | "vram" | "gaming";
 
 const NAV: { id: ViewId; label: string; icon: string }[] = [
   { id: "chat", label: "Chat", icon: "💬" },
@@ -26,12 +31,16 @@ const NAV: { id: ViewId; label: string; icon: string }[] = [
   { id: "files", label: "Archivos", icon: "📁" },
   { id: "terminal", label: "Terminal", icon: "⌨️" },
   { id: "tasks", label: "Tareas", icon: "📋" },
+  { id: "security", label: "Seguridad", icon: "🛡️" },
   { id: "memory", label: "Memoria", icon: "🗄️" },
   { id: "tools", label: "Herramientas", icon: "🧰" },
   { id: "gpu", label: "GPU", icon: "📊" },
   { id: "benchmarks", label: "Benchmarks", icon: "⏱️" },
   { id: "radar", label: "Radar", icon: "📡" },
   { id: "research", label: "Research", icon: "🔬" },
+  { id: "anime", label: "Anime ↔ Real", icon: "🎬" },
+  { id: "vram", label: "VRAM Guard", icon: "🧯" },
+  { id: "gaming", label: "Gaming Radar", icon: "🎮" },
   { id: "history", label: "Historial", icon: "🕘" },
   { id: "settings", label: "Configuración", icon: "⚙️" },
 ];
@@ -191,8 +200,12 @@ export default function App() {
           {view === "history" && <History notify={notify} />}
           {view === "tools" && <Tools />}
           {view === "tasks" && <Tasks />}
+          {view === "security" && <Security notify={notify} />}
           {view === "radar" && <Radar notify={notify} />}
           {view === "research" && <Research notify={notify} />}
+          {view === "anime" && <AnimeReal notify={notify} />}
+          {view === "vram" && <Vram notify={notify} />}
+          {view === "gaming" && <Gaming notify={notify} />}
         </section>
       </main>
 

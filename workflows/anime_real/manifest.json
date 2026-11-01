@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "actualizado": "2026-11-01",
+  "comfyui": "http://127.0.0.1:8188",
+  "nota": "Cada plantilla es un workflow en formato API probado contra ComfyUI real. Los segundos son medidos, no estimados. Las entradas pendiente_conversion son grafos de la UI que aún no se han convertido: la app no las ofrece.",
+  "templates": [
+    {
+      "id": "anime2real_id_sdxl",
+      "titulo": "Anime → Real con identidad (IPAdapter)",
+      "direccion": "anime2real",
+      "tipo": "imagen",
+      "motor": "ComfyUI · SDXL img2img + IPAdapter SDXL ViT-H",
+      "archivo": "anime2real_id_sdxl.json",
+      "verificado": "01/11/2026 · 16,5 s · goku_anime_rt.png · IPAdapter 0,40 + denoise 0,55",
+      "segundos_estimados": 17,
+      "estado": "listo",
+      "nodos": {
+        "imagen": "2",
+        "positivo": "5",
+        "negativo": "6",
+        "muestreo": "7",
+        "escalado": "3"
+      },
+      "requiere": [
+        "Realistic_Vision_V6.0_B1.safetensors",
+        "ip-adapter_sdxl_vit-h.safetensors",
+        "clip_vision_h.safetensors"
+      ],
+      "nota": "La mejor conservación de personaje de las tres: mantiene silueta del pelo, ropa y encuadre. Si la referencia tiene un estilo muy marcado, baja el peso del IPAdapter."
+    },
+    {
+      "id": "anime2real_sdxl",
+      "titulo": "Anime → Real libre (SDXL img2img)",
+      "direccion": "anime2real",
+      "tipo": "imagen",
+      "motor": "ComfyUI · SDXL img2img",
+      "archivo": "anime2real_sdxl.json",
+      "verificado": "01/11/2026 · 14,0 s · goku_anime_rt.png · denoise 0,58",
+      "segundos_estimados": 14,
+      "estado": "listo",
+      "nodos": {
+        "imagen": "2",
+        "positivo": "5",
+        "negativo": "6",
+        "muestreo": "7",
+        "escalado": "3"
+      },
+      "requiere": ["Realistic_Vision_V6.0_B1.safetensors"],
+      "nota": "Reinterpreta más: sale muy realista pero puede cambiar género y facciones. Baja el denoise a 0,42 si quieres conservar más la estructura."
+    },
+    {
+      "id": "real2anime_sdxl",
+      "titulo": "Real → Anime (SDXL anime)",
+      "direccion": "real2anime",
+      "tipo": "imagen",
+      "motor": "ComfyUI · SDXL img2img (Animagine XL 4.0)",
+      "archivo": "real2anime_sdxl.json",
+      "verificado": "01/11/2026 · 20,1 s · refer.jpeg (Goku fotorreal) · denoise 0,55",
+      "segundos_estimados": 20,
+      "estado": "listo",
+      "nodos": {
+        "imagen": "2",
+        "positivo": "5",
+        "negativo": "6",
+        "muestreo": "7",
+        "escalado": "3"
+      },
+      "requiere": ["animagineXL40_v4Opt.safetensors"],
+      "nota": "Conserva identidad y parecido muy bien: mismo personaje, mismo traje, misma pose, estética anime limpia."
+    },
+    {
+      "id": "anime2real_ditto_video",
+      "titulo": "Vídeo anime → vídeo real (Ditto / VACE)",
+      "direccion": "anime2real",
+      "tipo": "video",
+      "motor": "WanGP · Wan 2.1 VACE 14B + LoRA Ditto",
+      "archivo": "ditto_dbz.json",
+      "verificado": "",
+      "segundos_estimados": 0,
+      "estado": "pendiente_conversion",
+      "nodos": {},
+      "requiere": ["vace_ditto_14B.json (WanGP)", "LoRA Ditto 0,23 GB"],
+      "nota": "El grafo existe en ComfyUI/WanGP pero no está convertido a formato API: no se ofrece hasta probarlo."
+    },
+    {
+      "id": "anime2real_ltx_video",
+      "titulo": "Vídeo anime → vídeo real (LTX 2.3 Anime2Real)",
+      "direccion": "anime2real",
+      "tipo": "video",
+      "motor": "ComfyUI · LTX 2.3 22B + LoRA IC",
+      "archivo": "LTX23_Anime2Real.json",
+      "verificado": "",
+      "segundos_estimados": 0,
+      "estado": "pendiente_conversion",
+      "nodos": {},
+      "requiere": ["LTX 2.3 22B", "LoRA IC anime→real"],
+      "nota": "Usa subgrafos: hay que aplanarlo antes de poder encolarlo por API."
+    }
+  ]
+}

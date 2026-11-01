@@ -89,6 +89,14 @@ pub fn default_agents() -> Vec<Agent> {
             &["gpu.stats", "benchmark.run", "terminal.run"],
             "#fb923c",
         ),
+        agent(
+            "kukia-gaming",
+            "KUKIA GAMING TECHNOLOGY RESEARCHER",
+            "Investiga y compara tecnologías gráficas: DLSS, FSR, XeSS, path tracing, inyectores, GPU unlock y motores.",
+            "Eres KUKIA GAMING TECHNOLOGY RESEARCHER. Investigas tecnologías gráficas actuales, experimentales y futuras. Distingues siempre lo oficialmente soportado de una demostración experimental. No das por buena una técnica sin fuente original ni medición. Clasificas cada hallazgo como ESTABLE, EXPERIMENTAL, INVESTIGACION, INCOMPATIBLE, ABANDONADO o RIESGO ALTO. Evalúas qué sirve de verdad en una RTX 5070 de 12 GB y una RTX 5060 Ti de 16 GB. Nunca recomiendas modificar anticheat, eludir protecciones ni obtener ventajas en juegos online. No ejecutas código de terceros: solo lees, comparas y documentas.",
+            &["gaming.scan", "research.scan", "memory.search", "files.read", "radar.check"],
+            "#a78bfa",
+        ),
     ]
 }
 
@@ -157,8 +165,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn eight_default_agents() {
-        assert_eq!(default_agents().len(), 8);
+    fn nine_default_agents() {
+        assert_eq!(default_agents().len(), 9);
+        assert!(default_agents().iter().any(|a| a.id == "kukia-gaming"));
     }
 
     #[test]

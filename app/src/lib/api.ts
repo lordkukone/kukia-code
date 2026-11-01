@@ -115,6 +115,12 @@ export interface BenchmarkResult {
   created_at: string;
 }
 
+export interface CloudProviderCfg {
+  id: string;
+  label: string;
+  base_url: string;
+}
+
 export interface AppConfig {
   default_provider: string;
   default_model: string;
@@ -123,9 +129,28 @@ export interface AppConfig {
   theme: string;
   cloud_base_url: string;
   cloud_model: string;
+  /** Proveedor cloud activo (opencode, freebuff, openai, custom). */
+  cloud_provider: string;
+  /** Catálogo de proveedores. Nunca contiene claves. */
+  cloud_providers: CloudProviderCfg[];
   has_cloud_key: boolean;
   research_auto: boolean;
   reasoning: boolean;
+  active_project?: string | null;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  root: string;
+  read_paths: string;
+  write_paths: string;
+  read_only_paths: string;
+  allow_write: boolean;
+  allow_shell: boolean;
+  allow_network: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Discovery {
@@ -192,6 +217,207 @@ export interface ApprovalRow {
   created_at: string;
 }
 
+export interface RunResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+  duration_ms: number;
+  timed_out: boolean;
+  cancelled: boolean;
+  pid: number;
+}
+
+export interface AgentPolicy {
+  agent: string;
+  allow_read: boolean;
+  allow_write: boolean;
+  allow_shell: boolean;
+  allow_network: boolean;
+  allow_download: boolean;
+  allow_tools: boolean;
+  read_paths: string;
+  write_paths: string;
+  read_only_paths: string;
+  updated_at: string;
+}
+
+export interface AuditRow {
+  id: number;
+  agent: string;
+  tool: string;
+  action: string;
+  targets: string;
+  approved: boolean;
+  result: string;
+  error: string;
+  created_at: string;
+}
+
+export interface RunningInfo {
+  id: string;
+  pid: number;
+  command: string;
+  cwd: string;
+  started_at: string;
+}
+
+export interface RunStreamEvent {
+  kind: "started" | "done" | "failed";
+  id: string;
+  pid?: number;
+  result?: RunResult;
+  message?: string;
+}
+
+/* ============ KUKIA ANIME ↔ REAL STUDIO ============ */
+
+export interface ComfyStatus {
+  online: boolean;
+  base_url: string;
+  version: string;
+  device: string;
+  vram_total_mb: number;
+  vram_free_mb: number;
+  en_cola: number;
+  nota: string;
+}
+
+export interface AnimeCapability {
+  id: string;
+  titulo: string;
+  direccion: string;
+  tipo: string;
+  motor: string;
+  disponible: boolean;
+  faltan: string[];
+  verificado: string;
+  segundos_estimados: number;
+  nota: string;
+  estado: string;
+}
+
+export interface AnimeTemplate {
+  id: string;
+  titulo: string;
+  direccion: string;
+  tipo: string;
+  motor: string;
+  archivo: string;
+  verificado: string;
+  requiere: string[];
+  segundos_estimados: number;
+  nota: string;
+  estado: string;
+}
+
+export interface AnimeResult {
+  id: string;
+  prompt_id: string;
+  template_id: string;
+  direccion: string;
+  segundos: number;
+  archivos: string[];
+  bytes: number;
+  preview: string;
+  entrada_preview: string;
+}
+
+export interface AnimeJob {
+  id: string;
+  fecha: string;
+  plantilla: string;
+  direccion: string;
+  entrada: string;
+  segundos: number;
+  archivos: string[];
+}
+
+/* ============ GUARDIA DE VRAM ============ */
+
+export interface GpuVram {
+  index: number;
+  name: string;
+  total_mb: number;
+  used_mb: number;
+  free_mb: number;
+  reserved_mb: number;
+  utilization: number;
+}
+
+export interface EngineModel {
+  name: string;
+  vram_mb: number;
+  size_gb: number;
+}
+
+export interface EngineState {
+  engine: string;
+  online: boolean;
+  note: string;
+  models: EngineModel[];
+  vram_total_mb: number;
+}
+
+export interface ProcessOnGpu {
+  pid: number;
+  name: string;
+  vram_mb: number;
+}
+
+export interface VramReport {
+  gpus: GpuVram[];
+  engines: EngineState[];
+  processes: ProcessOnGpu[];
+  competition: boolean;
+  warning: string;
+  recommendations: string[];
+  checked_at: string;
+}
+
+/* ============ KUKIA FUTURE GAMING RADAR ============ */
+
+export interface GamingItem {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  source: string;
+  url: string;
+  published: string;
+  updated: string;
+  status: string;
+  opensource: string;
+  license: string;
+  os: string;
+  gpus: string;
+  games: string;
+  requirements: string;
+  measured: string;
+  risks: string;
+  conflicts: string;
+  rtx5070: string;
+  rtx5060ti: string;
+  potential: string;
+  recommendation: string;
+  score: number;
+}
+
+export interface GamingAlertRow {
+  id: number;
+  item_id: string;
+  level: string;
+  message: string;
+  created_at: string;
+}
+
+export interface GamingScan {
+  encontrados: number;
+  nuevos: number;
+  alertas: number;
+  informe: string;
+}
+
 /* ============ Invocaciones ============ */
 
 export const api = {
@@ -220,12 +446,38 @@ export const api = {
   setConfig: (config: AppConfig) => invoke<AppConfig>("config_set", { config }),
 
   logs: (lines: number) => invoke<string[]>("logs_tail", { lines }),
-  runCommand: (command: string, cwd: string, approved: boolean) =>
-    invoke<{ code: number; stdout: string; stderr: string }>("run_command", {
+  runCommand: (command: string, cwd: string, approved: boolean, timeoutSecs?: number) =>
+    invoke<RunResult>("run_command", {
       command,
       cwd,
       approved,
+      agent: null,
+      timeoutSecs: timeoutSecs ?? null,
     }),
+  commandCancel: (id: string) => invoke<boolean>("command_cancel", { id }),
+  commandsRunning: () => invoke<RunningInfo[]>("commands_running"),
+
+  policyList: () => invoke<AgentPolicy[]>("policy_list"),
+  policyGet: (agent: string) => invoke<AgentPolicy>("policy_get", { agent }),
+  policySave: (policy: AgentPolicy, approved: boolean) =>
+    invoke<AgentPolicy>("policy_save", { policy, approved }),
+  auditList: (query?: string, tool?: string, limit?: number) =>
+    invoke<AuditRow[]>("audit_list", {
+      query: query ?? null,
+      tool: tool ?? null,
+      approved: null,
+      limit: limit ?? 100,
+    }),
+  projects: () => invoke<Project[]>("projects_list"),
+  createProject: (name: string, root: string, allowShell?: boolean) =>
+    invoke<Project>("project_create", { name, root, allowShell: allowShell ?? null }),
+  updateProject: (project: Project, approved: boolean) =>
+    invoke<Project>("project_update", { project, approved }),
+  activateProject: (id: string | null) => invoke<AppConfig>("project_activate", { id }),
+  activeProject: () => invoke<Project | null>("project_active"),
+
+  auditExport: (path: string, approved: boolean) =>
+    invoke<number>("audit_export", { path, approved, agent: null }),
 
   benchmark: (provider: string, model: string, prompt: string) =>
     invoke<BenchmarkResult>("benchmark_run", { provider, model, prompt }),
@@ -253,11 +505,66 @@ export const api = {
     notes: string,
   ) => invoke<void>("compat_add", { engine, model, arch, quant, gpu, method, notes }),
 
+  vramReport: () => invoke<VramReport>("vram_report"),
+  vramFits: (sizeGb: number, gpu: number) =>
+    invoke<[boolean, string] | null>("vram_fits", { sizeGb, gpu }),
+
+  gamingScan: () => invoke<GamingScan>("gaming_scan"),
+  gamingItems: (limit?: number) =>
+    invoke<GamingItem[]>("gaming_items", { limit: limit ?? 200 }),
+  gamingAlerts: (limit?: number) =>
+    invoke<GamingAlertRow[]>("gaming_alerts", { limit: limit ?? 100 }),
+  gamingReport: () => invoke<string>("gaming_report"),
+  gamingLabPath: () => invoke<string>("gaming_lab_path"),
+
+  animeStatus: () => invoke<ComfyStatus>("anime_status", { base: null }),
+  animeTemplates: () => invoke<AnimeTemplate[]>("anime_templates"),
+  animeCapabilities: () => invoke<AnimeCapability[]>("anime_capabilities", { base: null }),
+  animeInputs: () => invoke<string[]>("anime_inputs", { base: null }),
+  animeOutputPath: () => invoke<string>("anime_output_path"),
+  animeHistory: (limit?: number) => invoke<AnimeJob[]>("anime_history", { limit: limit ?? 30 }),
+  animeConvert: (req: {
+    template_id: string;
+    image: string;
+    prompt: string;
+    negative: string;
+    denoise: number | null;
+    seed: number | null;
+    width: number | null;
+    height: number | null;
+  }) => invoke<AnimeResult>("anime_convert", { base: null, req }),
+
   files: (path: string) => invoke<FileEntry[]>("files_list", { path }),
   readFile: (path: string) => invoke<string>("files_read", { path }),
   writeFile: (path: string, content: string, approved: boolean) =>
     invoke<void>("files_write", { path, content, approved }),
 };
+
+/* Ejecución de comandos con id inmediato, timeout y cancelación (Fase 3.0) */
+export function runCommandStream(
+  command: string,
+  cwd: string,
+  approved: boolean,
+  onStarted: (id: string, pid: number) => void,
+  onDone: (result: RunResult) => void,
+  onFailed: (msg: string) => void,
+  timeoutSecs?: number,
+): Promise<string> {
+  const channel = new Channel<RunStreamEvent>();
+  channel.onmessage = (ev) => {
+    if (ev.kind === "started") onStarted(ev.id, ev.pid ?? 0);
+    else if (ev.kind === "done" && ev.result) onDone(ev.result);
+    else if (ev.kind === "failed") onFailed(ev.message ?? "error desconocido");
+  };
+  return invoke<string>("run_command_stream", {
+    command,
+    cwd,
+    approved,
+    agent: null,
+    timeoutSecs: timeoutSecs ?? null,
+    onEvent: channel,
+  });
+}
 
 /* Streaming con Channel de Tauri 2 */
 export function chatStream(

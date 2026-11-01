@@ -80,8 +80,29 @@ fn client(timeout: u64) -> reqwest::Client {
 fn base(provider: &str, cfg: &AppConfig) -> String {
     match provider {
         "lmstudio" => "http://127.0.0.1:1234".to_string(),
-        "cloud" => cfg.cloud_base_url.trim_end_matches('/').to_string(),
+        // El endpoint lo pone el proveedor cloud activo del catálogo.
+        "cloud" => {
+            let activo = cfg.active_cloud();
+            let url = if activo.base_url.trim().is_empty() {
+                cfg.cloud_base_url.clone()
+            } else {
+                activo.base_url
+            };
+            url.trim_end_matches('/').to_string()
+        }
         _ => "http://127.0.0.1:11434".to_string(),
+    }
+}
+
+/// Une un endpoint base con una ruta de la API sin duplicar el `/v1`:
+/// `https://opencode.ai/zen/v1` + `/chat/completions` → `…/zen/v1/chat/completions`,
+/// y `http://127.0.0.1:1235` + `/chat/completions` → `http://127.0.0.1:1235/v1/chat/completions`.
+fn join_api(base_url: &str, ruta: &str) -> String {
+    let b = base_url.trim_end_matches('/');
+    if b.ends_with("/v1") {
+        format!("{b}{ruta}")
+    } else {
+        format!("{b}/v1{ruta}")
     }
 }
 
@@ -118,10 +139,9 @@ async fn effective_base(provider: &str, cfg: &AppConfig) -> String {
     }
 }
 
-fn cloud_key() -> Option<String> {
-    std::env::var("KUKIA_CLOUD_KEY")
-        .ok()
-        .filter(|k| !k.trim().is_empty())
+/// Clave del proveedor cloud activo (entorno → secrets.json → auth.json de OpenCode).
+fn cloud_key(cfg: &AppConfig) -> Option<String> {
+    crate::config::cloud_credential(&cfg.active_cloud().id).0
 }
 
 async fn get_json(url: &str, key: Option<&str>) -> Result<Value, String> {
@@ -184,25 +204,38 @@ pub async fn list_providers(cfg: &AppConfig) -> Vec<ProviderInfo> {
         note,
     });
 
-    // Cloud OpenAI-compatible
-    let cloud_base = cfg.cloud_base_url.trim_end_matches('/');
-    let key = cloud_key();
+    // Cloud OpenAI-compatible: el endpoint y la clave salen del proveedor activo.
+    let activo = cfg.active_cloud();
+    let cloud_base = base("cloud", cfg);
+    let (key, origen) = crate::config::cloud_credential(&activo.id);
     let (online, count, note) = if key.is_none() {
-        (false, 0, "falta KUKIA_CLOUD_KEY".to_string())
+        (
+            false,
+            0,
+            format!(
+                "{}: sin clave (KUKIA_CLOUD_KEY_{}, secrets.json o auth.json de OpenCode)",
+                activo.label,
+                activo.id.to_uppercase().replace('-', "_")
+            ),
+        )
     } else {
         match get_json(&format!("{cloud_base}/models"), key.as_deref()).await {
             Ok(v) => {
-                let n = v["data"].as_array().map(|a| a.len()).unwrap_or(0);
-                (true, n, String::new())
+                let n = v["data"]
+                    .as_array()
+                    .or_else(|| v["models"].as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                (true, n, format!("{} · clave desde {}", activo.label, origen.label()))
             }
-            Err(e) => (false, 0, format!("sin respuesta: {e}")),
+            Err(e) => (false, 0, format!("{}: sin respuesta ({e})", activo.label)),
         }
     };
     out.push(ProviderInfo {
         id: "cloud".into(),
-        name: "Cloud (OpenAI-compatible)".into(),
-        kind: "remoto".into(),
-        base_url: cloud_base.to_string(),
+        name: format!("Cloud · {}", activo.label),
+        kind: "remoto · OpenAI-compatible".into(),
+        base_url: cloud_base,
         online,
         models_count: count,
         note,
@@ -214,8 +247,14 @@ pub async fn list_providers(cfg: &AppConfig) -> Vec<ProviderInfo> {
 pub async fn list_models(provider: &str, cfg: &AppConfig) -> Result<Vec<ModelInfo>, String> {
     match provider {
         "lmstudio" | "cloud" => {
-            let url = format!("{}/v1/models", effective_base(provider, cfg).await);
-            let v = get_json(&url, cloud_key().as_deref()).await?;
+            let base_url = effective_base(provider, cfg).await;
+            let url = join_api(&base_url, "/models");
+            let (key, _origen) = if provider == "cloud" {
+                crate::config::cloud_credential(&cfg.active_cloud().id)
+            } else {
+                (None, crate::config::KeySource::None)
+            };
+            let v = get_json(&url, key.as_deref()).await?;
             let mut out = Vec::new();
             if let Some(arr) = v["data"].as_array() {
                 for m in arr {
@@ -353,9 +392,9 @@ async fn chat_ollama(req: &ChatRequest, cfg: &AppConfig) -> Result<ChatResponse,
 }
 
 async fn chat_openai(req: &ChatRequest, cfg: &AppConfig) -> Result<ChatResponse, String> {
-    let url = format!(
-        "{}/v1/chat/completions",
-        effective_base(&req.provider, cfg).await
+    let url = join_api(
+        &effective_base(&req.provider, cfg).await,
+        "/chat/completions",
     );
     let started = Instant::now();
     let mut body = json!({
@@ -373,7 +412,7 @@ async fn chat_openai(req: &ChatRequest, cfg: &AppConfig) -> Result<ChatResponse,
         body["reasoning_effort"] = json!("none");
     }
     let mut builder = client(600).post(&url).json(&body);
-    if let Some(k) = cloud_key() {
+    if let Some(k) = cloud_key(cfg) {
         builder = builder.bearer_auth(k);
     }
     let mut resp = builder.send().await.map_err(|e| format!("{}: {e}", req.provider))?;
@@ -389,7 +428,7 @@ async fn chat_openai(req: &ChatRequest, cfg: &AppConfig) -> Result<ChatResponse,
                 "temperature": req.temperature.unwrap_or(cfg.temperature),
                 "stream": false
             }));
-            if let Some(k) = cloud_key() {
+            if let Some(k) = cloud_key(cfg) {
                 retry = retry.bearer_auth(k);
             }
             resp = retry
@@ -527,9 +566,9 @@ async fn stream_openai(
     cfg: &AppConfig,
     tx: &UnboundedSender<ChatEvent>,
 ) -> Result<(), String> {
-    let url = format!(
-        "{}/v1/chat/completions",
-        effective_base(&req.provider, cfg).await
+    let url = join_api(
+        &effective_base(&req.provider, cfg).await,
+        "/chat/completions",
     );
     let started = Instant::now();
     let body = json!({
@@ -539,7 +578,7 @@ async fn stream_openai(
         "stream": true
     });
     let mut builder = client(600).post(&url).json(&body);
-    if let Some(k) = cloud_key() {
+    if let Some(k) = cloud_key(cfg) {
         builder = builder.bearer_auth(k);
     }
     let resp = builder.send().await.map_err(|e| e.to_string())?;
@@ -627,7 +666,37 @@ mod tests {
         let cfg = AppConfig::default();
         assert_eq!(base("ollama", &cfg), "http://127.0.0.1:11434");
         assert_eq!(base("lmstudio", &cfg), "http://127.0.0.1:1234");
+        // Por defecto el proveedor cloud activo es OpenCode Zen.
+        assert_eq!(base("cloud", &cfg), "https://opencode.ai/zen/v1");
+    }
+
+    #[test]
+    fn el_proveedor_cloud_activo_manda_en_la_base() {
+        let mut cfg = AppConfig::default();
+        cfg.cloud_provider = "openai".into();
         assert_eq!(base("cloud", &cfg), "https://api.openai.com/v1");
+        cfg.cloud_provider = "freebuff".into();
+        assert_eq!(base("cloud", &cfg), "https://freebuff.com/api/v1/paid");
+    }
+
+    #[test]
+    fn join_api_no_duplica_el_v1() {
+        assert_eq!(
+            join_api("https://opencode.ai/zen/v1", "/models"),
+            "https://opencode.ai/zen/v1/models"
+        );
+        assert_eq!(
+            join_api("https://opencode.ai/zen/v1/", "/chat/completions"),
+            "https://opencode.ai/zen/v1/chat/completions"
+        );
+        assert_eq!(
+            join_api("http://127.0.0.1:1235", "/chat/completions"),
+            "http://127.0.0.1:1235/v1/chat/completions"
+        );
+        assert_eq!(
+            join_api("https://api.openai.com/v1", "/models"),
+            "https://api.openai.com/v1/models"
+        );
     }
 
     #[test]

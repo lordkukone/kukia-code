@@ -114,6 +114,27 @@ export default function Settings({ config, onSaved, notify }: Props) {
         <h2>Proveedor cloud (OpenAI-compatible)</h2>
         <div className="form-grid">
           <label>
+            Proveedor
+            <select
+              value={form.cloud_provider}
+              onChange={(e) => {
+                const id = e.target.value;
+                const preset = (form.cloud_providers ?? []).find((p) => p.id === id);
+                setForm((f) => ({
+                  ...f,
+                  cloud_provider: id,
+                  cloud_base_url: preset && preset.base_url ? preset.base_url : f.cloud_base_url,
+                }));
+              }}
+            >
+              {(form.cloud_providers ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             Base URL
             <input
               value={form.cloud_base_url}
@@ -131,8 +152,11 @@ export default function Settings({ config, onSaved, notify }: Props) {
           </label>
         </div>
         <p className="muted small">
-          La clave API se lee de la variable de entorno <code>KUKIA_CLOUD_KEY</code>. No se guarda en
-          el archivo de configuración. Estado: {form.has_cloud_key ? "clave detectada ✓" : "sin clave"}.
+          La clave no se guarda en la configuración ni se muestra nunca. Se busca en{" "}
+          <code>KUKIA_CLOUD_KEY_&lt;ID&gt;</code>, luego en{" "}
+          <code>%APPDATA%\KukiaCode\secrets.json</code> y, en solo lectura, en el{" "}
+          <code>auth.json</code> de OpenCode. Estado del proveedor activo:{" "}
+          {form.has_cloud_key ? "clave detectada ✓" : "sin clave"}.
         </p>
       </div>
 

@@ -23,9 +23,9 @@ fn db_temporal(nombre: &str) -> PathBuf {
 
 /* --------------------------- SEGURIDAD --------------------------- */
 
-#[test]
-fn terminal_sin_aprobacion_se_rechaza() {
-    let res = security::run_powershell("Write-Output 'no deberia ejecutarse'", ".", false);
+#[tokio::test]
+async fn terminal_sin_aprobacion_se_rechaza() {
+    let res = security::run_powershell("Write-Output 'no deberia ejecutarse'", ".", false).await;
     match res {
         Ok(r) => panic!("FALLO DE SEGURIDAD: se ejecuto sin aprobacion. stdout={:?}", r.stdout),
         Err(e) => {
@@ -35,18 +35,19 @@ fn terminal_sin_aprobacion_se_rechaza() {
     }
 }
 
-#[test]
-fn terminal_con_aprobacion_se_ejecuta() {
+#[tokio::test]
+async fn terminal_con_aprobacion_se_ejecuta() {
     let res = security::run_powershell("Write-Output 'KUKIA_OK'", ".", true)
+        .await
         .expect("con aprobacion debe ejecutarse");
     println!("codigo={} stdout={:?}", res.code, res.stdout);
     assert_eq!(res.code, 0);
     assert!(res.stdout.contains("KUKIA_OK"));
 }
 
-#[test]
-fn terminal_rechaza_directorio_inexistente() {
-    let res = security::run_powershell("Write-Output x", "Z:\\ruta_que_no_existe_kukia", true);
+#[tokio::test]
+async fn terminal_rechaza_directorio_inexistente() {
+    let res = security::run_powershell("Write-Output x", "Z:\\ruta_que_no_existe_kukia", true).await;
     assert!(res.is_err(), "deberia rechazar un cwd inexistente");
 }
 

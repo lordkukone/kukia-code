@@ -1,0 +1,96 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": { "title": "Checkpoint realista" },
+    "inputs": { "ckpt_name": "Realistic_Vision_V6.0_B1.safetensors" }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "_meta": { "title": "Imagen anime de entrada (referencia + estructura)" },
+    "inputs": { "image": "goku_anime_rt.png" }
+  },
+  "10": {
+    "class_type": "IPAdapterModelLoader",
+    "_meta": { "title": "IPAdapter SDXL ViT-H" },
+    "inputs": { "ipadapter_file": "ip-adapter_sdxl_vit-h.safetensors" }
+  },
+  "11": {
+    "class_type": "CLIPVisionLoader",
+    "_meta": { "title": "CLIP Vision H" },
+    "inputs": { "clip_name": "clip_vision_h.safetensors" }
+  },
+  "12": {
+    "class_type": "IPAdapterAdvanced",
+    "_meta": { "title": "Identidad y composición" },
+    "inputs": {
+      "model": ["1", 0],
+      "ipadapter": ["10", 0],
+      "image": ["2", 0],
+      "clip_vision": ["11", 0],
+      "weight": 0.4,
+      "weight_type": "linear",
+      "combine_embeds": "concat",
+      "start_at": 0.0,
+      "end_at": 1.0,
+      "embeds_scaling": "V only"
+    }
+  },
+  "3": {
+    "class_type": "ImageScale",
+    "_meta": { "title": "Escalar a 1024" },
+    "inputs": {
+      "image": ["2", 0],
+      "upscale_method": "lanczos",
+      "width": 1024,
+      "height": 1024,
+      "crop": "center"
+    }
+  },
+  "4": {
+    "class_type": "VAEEncode",
+    "_meta": { "title": "Codificar a latente (conserva la estructura)" },
+    "inputs": { "pixels": ["3", 0], "vae": ["1", 2] }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "Positivo (realismo)" },
+    "inputs": {
+      "text": "photorealistic portrait of a real person, natural skin texture with visible pores, fine vellus hair, realistic eyes, cinematic photograph, Sony A7R V, 85mm f/1.4, soft natural light, detailed hair strands, correct human anatomy, no filter, no beauty mode",
+      "clip": ["1", 1]
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "Negativo (anti-anime)" },
+    "inputs": {
+      "text": "anime, cartoon, illustration, cel shading, flat colors, line art, drawing, 3d render, plastic skin, waxy, oversaturated, blurry, low quality, deformed, extra fingers",
+      "clip": ["1", 1]
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "_meta": { "title": "Muestreo img2img con IPAdapter" },
+    "inputs": {
+      "model": ["12", 0],
+      "seed": 123456789,
+      "steps": 28,
+      "cfg": 7.0,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "positive": ["5", 0],
+      "negative": ["6", 0],
+      "latent_image": ["4", 0],
+      "denoise": 0.55
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "_meta": { "title": "Decodificar" },
+    "inputs": { "samples": ["7", 0], "vae": ["1", 2] }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "_meta": { "title": "Guardar resultado" },
+    "inputs": { "images": ["8", 0], "filename_prefix": "kukia_anime2real_id" }
+  }
+}
