@@ -17,6 +17,13 @@ benchmarks/*
 .env
 .env.*
 
+# Artefactos de verificacion y salidas generadas (no son proyecto)
+logs/
+tmp_capturas/
+tmp_seed_test/
+output/
+capturar_ventana.ps1
+
 # Sistema
 Thumbs.db
 .DS_Store
