@@ -39,6 +39,7 @@ src-tauri/      crate kukia-code (comandos Tauri, estado, ventana)
 | `security` | Ejecución PowerShell con aprobación obligatoria y límite de lectura de archivos |
 | `logs` | Log de aplicación en `%APPDATA%\KukiaCode\logs\kukia.log` |
 | `radar` | Consulta releases oficiales (GitHub API) y fuentes manuales |
+| `research` | KUKIA EXPERIMENTAL AI RADAR: arXiv, Hugging Face, GitHub, alertas, informes y descarga aislada |
 
 ## Flujo de chat
 
@@ -73,6 +74,17 @@ src-tauri/      crate kukia-code (comandos Tauri, estado, ventana)
 - Perfil inicial: GPU 0 (RTX 5070) 35 %, GPU 1 (RTX 5060 Ti) 65 %.
 - El reparto se guarda en configuración.
 - **No se confunde VRAM con cálculo**: Ollama/llama.cpp aplican offload por capas; LM Studio gestiona su propia VRAM. KUKIA CODE no impone métodos que el motor no soporte.
+
+## KUKIA Experimental AI Radar
+
+- Fuentes verificadas con API pública: **arXiv** (export API), **Hugging Face** (`/api/models`), **GitHub** (search API).
+- Fuentes manuales documentadas: Papers with Code, NVIDIA Research, PyTorch, llama.cpp, LM Studio, Ollama (se consultan vía release/changelog, sin inventar datos).
+- Cada descubrimiento guarda la ficha de 12 campos (nombre, fuente, fecha, requisitos, licencia, Windows, GPUs, VRAM, mejora esperada, medido, riesgos, recomendación).
+- Puntuación heurística transparente; **nada se marca compatible sin prueba**.
+- Alertas automáticas por palabras de alto valor (NVFP4, FP4, expert parallel, speculative decoding, MoE, KV cache, etc.).
+- Informe diario en `H:\KUKIA_RESEARCH\AI_EXPERIMENTAL\reports\YYYY-MM-DD.md`.
+- Descarga aislada solo https, máximo 25 MB, a `downloads\`; nunca se ejecuta nada.
+- Vigilancia automática cada 6 h si `research_auto` está activo (solo metadatos).
 
 ## Radar de actualizaciones
 

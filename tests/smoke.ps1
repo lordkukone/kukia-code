@@ -19,11 +19,11 @@ Check "icono ico existe" (Test-Path "$root\src-tauri\icons\icon.ico")
 Check "documentación arquitectura" (Test-Path "$root\docs\ARQUITECTURA.md")
 Check "manual de uso" (Test-Path "$root\docs\MANUAL.md")
 
-$exe = Get-ChildItem "$root\src-tauri\target\release\*.exe" -ErrorAction SilentlyContinue |
+$exe = Get-ChildItem "$root\target\release\*.exe" -ErrorAction SilentlyContinue |
        Where-Object { $_.Name -notlike "*setup*" } | Select-Object -First 1
 Check "binario release compilado" ($null -ne $exe)
 
-$setup = Get-ChildItem "$root\src-tauri\target\release\bundle\nsis\*.exe" -ErrorAction SilentlyContinue |
+$setup = Get-ChildItem "$root\target\release\bundle\nsis\*.exe" -ErrorAction SilentlyContinue |
          Select-Object -First 1
 Check "instalador NSIS generado" ($null -ne $setup)
 

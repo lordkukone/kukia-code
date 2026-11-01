@@ -1,8 +1,10 @@
-use kukia_core::{agents, config, gpu, logs, memory::Database, providers, radar, security};
+use kukia_core::{
+    agents, config, gpu, logs, memory::Database, providers, radar, research, security,
+};
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{Emitter, State};
 
 struct AppState {
     db: Mutex<Database>,
@@ -222,17 +224,28 @@ fn files_write(
     if !approved {
         return Err("Escritura bloqueada: falta aprobación explícita".into());
     }
-    // Backup si el archivo ya existe.
+    // Backup si el archivo ya existe. Si el backup no se puede verificar,
+    // la escritura se cancela: nunca se sobrescribe sin copia válida.
     if std::path::Path::new(&path).exists() {
         let dir = config::data_dir().join("backups");
-        let _ = std::fs::create_dir_all(&dir);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("No se pudo crear el directorio de backups: {e}"))?;
         let stamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
         let name = std::path::Path::new(&path)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "archivo".into());
         let backup = dir.join(format!("{name}.{stamp}.bak"));
-        let _ = std::fs::copy(&path, &backup);
+        std::fs::copy(&path, &backup)
+            .map_err(|e| format!("Backup fallido, escritura cancelada: {e}"))?;
+        let origen = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let copia = std::fs::metadata(&backup).map(|m| m.len()).unwrap_or(0);
+        if origen != copia {
+            return Err(format!(
+                "Backup incompleto ({origen} != {copia} bytes), escritura cancelada"
+            ));
+        }
+        logs::append("info", &format!("backup verificado: {}", backup.display()));
     }
     std::fs::write(&path, content).map_err(|e| e.to_string())?;
     state
@@ -351,6 +364,85 @@ fn compat_list(
     state.db.lock().unwrap().compat_list()
 }
 
+/* ------------------------- KUKIA EXPERIMENTAL AI RADAR ------------------------- */
+
+#[tauri::command]
+async fn research_scan(
+    state: State<'_, AppState>,
+    source: Option<String>,
+) -> Result<Vec<research::Discovery>, String> {
+    let src = source.unwrap_or_else(|| "all".into());
+    let found = research::scan_one(&src).await;
+    let mut new_count = 0usize;
+    {
+        let db = state.db.lock().unwrap();
+        for d in &found {
+            if db.research_upsert(d).unwrap_or(false) {
+                new_count += 1;
+            }
+        }
+        for a in research::alerts_for(&found) {
+            let _ = db.research_alert_add(&a.item_id, &a.level, &a.message);
+        }
+        let _ = db.research_run_add(&src, found.len(), new_count);
+    }
+    logs::append(
+        "info",
+        &format!("research: {src} → {} encontrados, {new_count} nuevos", found.len()),
+    );
+    state.db.lock().unwrap().research_list(300)
+}
+
+#[tauri::command]
+fn research_items(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<research::Discovery>, String> {
+    state.db.lock().unwrap().research_list(limit.unwrap_or(300))
+}
+
+#[tauri::command]
+fn research_alerts(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<kukia_core::memory::ResearchAlertRow>, String> {
+    state
+        .db
+        .lock()
+        .unwrap()
+        .research_alerts_list(limit.unwrap_or(100))
+}
+
+#[tauri::command]
+fn research_report(state: State<'_, AppState>) -> Result<String, String> {
+    let items = state.db.lock().unwrap().research_list(300)?;
+    let alerts = state.db.lock().unwrap().research_alerts_list(100)?;
+    let alerts_core: Vec<research::Alert> = alerts
+        .into_iter()
+        .map(|a| research::Alert {
+            item_id: a.item_id,
+            level: a.level,
+            message: a.message,
+        })
+        .collect();
+    let path = research::write_report(&items, &alerts_core)?;
+    Ok(path.display().to_string())
+}
+
+#[tauri::command]
+async fn research_fetch(url: String) -> Result<String, String> {
+    let path = research::fetch_public(&url).await?;
+    logs::append("info", &format!("research fetch: {url} → {}", path.display()));
+    Ok(path.display().to_string())
+}
+
+#[tauri::command]
+fn research_lab_path() -> String {
+    research::ensure_lab()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| research::lab_dir().display().to_string())
+}
+
 /* ------------------------- Logs ------------------------- */
 
 #[tauri::command]
@@ -370,6 +462,43 @@ pub fn run() {
         .manage(AppState {
             db: Mutex::new(db),
             config: Mutex::new(cfg),
+        })
+        .setup(|app| {
+            // KUKIA EXPERIMENTAL AI RADAR — vigilancia periódica (solo metadatos).
+            // No instala, no descarga binarios y respeta el interruptor de configuración.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+                    let cfg = config::load_config();
+                    if !cfg.research_auto {
+                        continue;
+                    }
+                    let items = research::scan_all().await;
+                    if items.is_empty() {
+                        continue;
+                    }
+                    let db_path = config::data_dir().join("kukia.db");
+                    if let Ok(db) = Database::open(&db_path) {
+                        let mut new_count = 0usize;
+                        for d in &items {
+                            if db.research_upsert(d).unwrap_or(false) {
+                                new_count += 1;
+                            }
+                        }
+                        for a in research::alerts_for(&items) {
+                            let _ = db.research_alert_add(&a.item_id, &a.level, &a.message);
+                        }
+                        let _ = db.research_run_add("auto-6h", items.len(), new_count);
+                        logs::append(
+                            "info",
+                            &format!("research auto: {} encontrados, {new_count} nuevos", items.len()),
+                        );
+                    }
+                    let _ = handle.emit("research://update", items.len());
+                }
+            });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_system_info,
@@ -399,6 +528,12 @@ pub fn run() {
             radar_check,
             compat_add,
             compat_list,
+            research_scan,
+            research_items,
+            research_alerts,
+            research_report,
+            research_fetch,
+            research_lab_path,
             logs_tail
         ])
         .run(tauri::generate_context!())

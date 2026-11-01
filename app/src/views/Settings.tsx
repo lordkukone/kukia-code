@@ -137,6 +137,39 @@ export default function Settings({ config, onSaved, notify }: Props) {
       </div>
 
       <div className="card">
+        <h2>Razonamiento</h2>
+        <label className="inline">
+          <input
+            type="checkbox"
+            checked={form.reasoning}
+            onChange={(e) => set("reasoning", e.target.checked)}
+          />
+          Permitir que los modelos razonen antes de responder (recomendado)
+        </label>
+        <p className="muted small">
+          Activado, los modelos con cadena de pensamiento (DeepSeek-R1, JEV, QwQ…) trabajan a pleno
+          rendimiento y su pensamiento se muestra plegado en el chat. Desactivado, se les pide que
+          respondan sin pensar: más rápido y más barato en tokens, pero peor en problemas complejos.
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>KUKIA Experimental AI Radar</h2>
+        <label className="inline">
+          <input
+            type="checkbox"
+            checked={form.research_auto}
+            onChange={(e) => set("research_auto", e.target.checked)}
+          />
+          Vigilancia automática cada 6 h (solo metadatos públicos, nunca instala nada)
+        </label>
+        <p className="muted small">
+          Consulta arXiv, Hugging Face y GitHub. Las descargas manuales van al laboratorio aislado
+          <code> H:\KUKIA_RESEARCH\AI_EXPERIMENTAL\downloads</code>.
+        </p>
+      </div>
+
+      <div className="card">
         <h2>Datos</h2>
         <p className="muted small">
           Configuración, memoria, logs y benchmarks se guardan por usuario en{" "}

@@ -71,7 +71,7 @@ export interface ChatResponse {
 }
 
 export interface ChatEvent {
-  kind: "token" | "done" | "error";
+  kind: "token" | "reasoning" | "done" | "error";
   text?: string;
   prompt_tokens?: number;
   completion_tokens?: number;
@@ -124,6 +124,36 @@ export interface AppConfig {
   cloud_base_url: string;
   cloud_model: string;
   has_cloud_key: boolean;
+  research_auto: boolean;
+  reasoning: boolean;
+}
+
+export interface Discovery {
+  id: string;
+  kind: string;
+  title: string;
+  source: string;
+  url: string;
+  published: string;
+  summary: string;
+  license: string;
+  windows: string;
+  gpu: string;
+  vram: string;
+  expected: string;
+  measured: string;
+  risks: string;
+  recommendation: string;
+  status: string;
+  score: number;
+}
+
+export interface ResearchAlertRow {
+  id: number;
+  item_id: string;
+  level: string;
+  message: string;
+  created_at: string;
 }
 
 export interface FileEntry {
@@ -202,6 +232,15 @@ export const api = {
   benchmarks: () => invoke<BenchmarkResult[]>("benchmarks_list"),
   approvals: () => invoke<ApprovalRow[]>("approvals_list"),
 
+  researchScan: (source?: string) =>
+    invoke<Discovery[]>("research_scan", { source: source ?? null }),
+  researchItems: (limit?: number) => invoke<Discovery[]>("research_items", { limit: limit ?? null }),
+  researchAlerts: (limit?: number) =>
+    invoke<ResearchAlertRow[]>("research_alerts", { limit: limit ?? null }),
+  researchReport: () => invoke<string>("research_report"),
+  researchFetch: (url: string) => invoke<string>("research_fetch", { url }),
+  researchLabPath: () => invoke<string>("research_lab_path"),
+
   radarCheck: () => invoke<UpdateInfo[]>("radar_check"),
   compatList: () => invoke<CompatRow[]>("compat_list"),
   compatAdd: (
@@ -226,10 +265,12 @@ export function chatStream(
   onToken: (text: string) => void,
   onDone: (r: ChatResponse) => void,
   onError: (msg: string) => void,
+  onReasoning?: (text: string) => void,
 ): Promise<void> {
   const channel = new Channel<ChatEvent>();
   channel.onmessage = (ev) => {
     if (ev.kind === "token" && ev.text) onToken(ev.text);
+    else if (ev.kind === "reasoning" && ev.text) onReasoning?.(ev.text);
     else if (ev.kind === "done")
       onDone({
         content: "",

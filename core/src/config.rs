@@ -13,6 +13,17 @@ pub struct AppConfig {
     pub cloud_model: String,
     #[serde(default)]
     pub has_cloud_key: bool,
+    #[serde(default = "default_true")]
+    pub research_auto: bool,
+    /// Permitir que los modelos con razonamiento (DeepSeek-R1, JEV, QwQ…)
+    /// emitan su cadena de pensamiento. Si se desactiva, se pide al motor que
+    /// no razone y solo se muestra la respuesta final.
+    #[serde(default = "default_true")]
+    pub reasoning: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -26,6 +37,8 @@ impl Default for AppConfig {
             cloud_base_url: "https://api.openai.com/v1".into(),
             cloud_model: String::new(),
             has_cloud_key: false,
+            research_auto: true,
+            reasoning: true,
         }
     }
 }

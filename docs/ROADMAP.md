@@ -6,6 +6,7 @@
 | F2 | MVP: Tauri + React, núcleo Rust, Ollama/LM Studio, memoria SQLite, GPU, logs, tests, radar | ✅ esta entrega |
 | F3 | Núcleo ampliado: permisos por herramienta, auditoría avanzada, recuperación de tareas | pendiente |
 | F4 | Conectores completos: PolyStrata, llama.cpp, descarga/gestión de modelos | pendiente |
+| F4.5 | KUKIA Experimental AI Radar (arXiv/HF/GitHub, alertas, informes, laboratorio aislado) | ✅ integrado en F2 |
 | F5 | UI avanzada: Monaco, markdown enriquecido, adjuntos, atajos | pendiente |
 | F6 | Agentes con tools reales + cliente MCP | pendiente |
 | F7 | Memoria semántica (embeddings), proyectos, editor | pendiente |

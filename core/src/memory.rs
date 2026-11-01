@@ -48,6 +48,15 @@ pub struct CompatRow {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ResearchAlertRow {
+    pub id: i64,
+    pub item_id: String,
+    pub level: String,
+    pub message: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ApprovalRow {
     pub id: i64,
     pub action: String,
@@ -122,6 +131,40 @@ impl Database {
                     gpu TEXT NOT NULL DEFAULT '',
                     method TEXT NOT NULL DEFAULT '',
                     notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS research_items (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    url TEXT NOT NULL DEFAULT '',
+                    published TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL DEFAULT '',
+                    license TEXT NOT NULL DEFAULT '',
+                    windows TEXT NOT NULL DEFAULT '',
+                    gpu TEXT NOT NULL DEFAULT '',
+                    vram TEXT NOT NULL DEFAULT '',
+                    expected TEXT NOT NULL DEFAULT '',
+                    measured TEXT NOT NULL DEFAULT '',
+                    risks TEXT NOT NULL DEFAULT '',
+                    recommendation TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT '',
+                    score REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS research_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_id TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS research_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    found INTEGER NOT NULL,
+                    new_items INTEGER NOT NULL,
                     created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS radar_cache (
@@ -421,6 +464,111 @@ impl Database {
             })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    /* ------------------------- Research radar ------------------------- */
+
+    pub fn research_upsert(&self, d: &crate::research::Discovery) -> Result<bool, String> {
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM research_items WHERE id=?1)",
+                params![d.id],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        self.conn
+            .execute(
+                "INSERT INTO research_items
+                 (id,kind,title,source,url,published,summary,license,windows,gpu,vram,expected,measured,risks,recommendation,status,score,created_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+                 ON CONFLICT(id) DO UPDATE SET
+                   title=excluded.title, source=excluded.source, url=excluded.url,
+                   published=excluded.published, summary=excluded.summary, license=excluded.license,
+                   windows=excluded.windows, gpu=excluded.gpu, vram=excluded.vram,
+                   expected=excluded.expected, measured=excluded.measured, risks=excluded.risks,
+                   recommendation=excluded.recommendation, status=excluded.status, score=excluded.score",
+                params![
+                    d.id, d.kind, d.title, d.source, d.url, d.published, d.summary, d.license,
+                    d.windows, d.gpu, d.vram, d.expected, d.measured, d.risks, d.recommendation,
+                    d.status, d.score, Self::now()
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(!exists)
+    }
+
+    pub fn research_list(&self, limit: usize) -> Result<Vec<crate::research::Discovery>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id,kind,title,source,url,published,summary,license,windows,gpu,vram,expected,measured,risks,recommendation,status,score
+                 FROM research_items ORDER BY score DESC, published DESC LIMIT ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![limit as i64], |r| {
+                Ok(crate::research::Discovery {
+                    id: r.get(0)?,
+                    kind: r.get(1)?,
+                    title: r.get(2)?,
+                    source: r.get(3)?,
+                    url: r.get(4)?,
+                    published: r.get(5)?,
+                    summary: r.get(6)?,
+                    license: r.get(7)?,
+                    windows: r.get(8)?,
+                    gpu: r.get(9)?,
+                    vram: r.get(10)?,
+                    expected: r.get(11)?,
+                    measured: r.get(12)?,
+                    risks: r.get(13)?,
+                    recommendation: r.get(14)?,
+                    status: r.get(15)?,
+                    score: r.get(16)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn research_alert_add(&self, item_id: &str, level: &str, message: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO research_alerts (item_id,level,message,created_at) VALUES (?1,?2,?3,?4)",
+                params![item_id, level, message, Self::now()],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn research_alerts_list(&self, limit: usize) -> Result<Vec<ResearchAlertRow>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id,item_id,level,message,created_at FROM research_alerts ORDER BY id DESC LIMIT ?1")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![limit as i64], |r| {
+                Ok(ResearchAlertRow {
+                    id: r.get(0)?,
+                    item_id: r.get(1)?,
+                    level: r.get(2)?,
+                    message: r.get(3)?,
+                    created_at: r.get(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn research_run_add(&self, source: &str, found: usize, new_items: usize) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO research_runs (source,found,new_items,created_at) VALUES (?1,?2,?3,?4)",
+                params![source, found as i64, new_items as i64, Self::now()],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /* ------------------------- Radar cache ------------------------- */

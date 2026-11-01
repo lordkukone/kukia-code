@@ -8,6 +8,7 @@ Asistente de IA de escritorio para Windows 11, independiente de OpenCode y Freeb
 - Conectores **Ollama** y **LM Studio** + APIs OpenAI-compatible
 - Monitor **GPU** (VRAM, uso, temperatura, consumo, relojes)
 - **KUKIA Technology Radar**: releases oficiales y matriz de compatibilidad
+- **KUKIA Experimental AI Radar**: arXiv, Hugging Face y GitHub, alertas, informes diarios y laboratorio aislado en `H:\KUKIA_RESEARCH\AI_EXPERIMENTAL`
 - Instalador **NSIS** (`KUKIA CODE_0.1.0_x64-setup.exe`)
 
 ## Estado

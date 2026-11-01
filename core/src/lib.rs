@@ -10,6 +10,7 @@ pub mod logs;
 pub mod memory;
 pub mod providers;
 pub mod radar;
+pub mod research;
 pub mod security;
 
 pub use config::AppConfig;

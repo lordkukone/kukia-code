@@ -15,6 +15,7 @@ export default function Chat({ provider, model, notify }: Props) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [streamText, setStreamText] = useState("");
+  const [thinking, setThinking] = useState("");
   const [agentId, setAgentId] = useState("kukia-master");
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -65,6 +66,7 @@ export default function Chat({ provider, model, notify }: Props) {
     setInput("");
     setBusy(true);
     setStreamText("");
+    setThinking("");
 
     try {
       const agent = agents.find((a) => a.id === agentId);
@@ -77,6 +79,7 @@ export default function Chat({ provider, model, notify }: Props) {
       setMessages((prev) => [...prev, userMsg]);
 
       let acc = "";
+      let thinkAcc = "";
       await chatStream(
         {
           provider,
@@ -109,6 +112,10 @@ export default function Chat({ provider, model, notify }: Props) {
           setBusy(false);
           setStreamText("");
           notify(`Error del modelo: ${err}`);
+        },
+        (think) => {
+          thinkAcc += think;
+          setThinking(thinkAcc);
         },
       );
     } catch (e) {
@@ -168,6 +175,16 @@ export default function Chat({ provider, model, notify }: Props) {
               <div className="msg-body">{m.content}</div>
             </div>
           ))}
+          {thinking && (
+            <div className="msg assistant">
+              <details className="thinking">
+                <summary>
+                  Pensamiento del modelo ({thinking.length} caracteres)
+                </summary>
+                <div className="msg-body muted">{thinking}</div>
+              </details>
+            </div>
+          )}
           {streamText && (
             <div className="msg assistant">
               <div className="msg-role">KUKIA</div>

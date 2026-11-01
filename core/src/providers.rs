@@ -57,6 +57,8 @@ pub struct ChatResponse {
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ChatEvent {
     Token { text: String },
+    /// Cadena de pensamiento de modelos con razonamiento (DeepSeek-R1, JEV…).
+    Reasoning { text: String },
     Done {
         prompt_tokens: u64,
         completion_tokens: u64,
@@ -80,6 +82,39 @@ fn base(provider: &str, cfg: &AppConfig) -> String {
         "lmstudio" => "http://127.0.0.1:1234".to_string(),
         "cloud" => cfg.cloud_base_url.trim_end_matches('/').to_string(),
         _ => "http://127.0.0.1:11434".to_string(),
+    }
+}
+
+/// LM Studio no siempre escucha en 1234: el usuario puede cambiarlo desde su
+/// interfaz (en esta máquina está en 1235). Se sondean los puertos conocidos
+/// y se usa el primero que responda, sin tocar la configuración de LM Studio.
+const LMSTUDIO_PORTS: [u16; 2] = [1234, 1235];
+
+async fn probe(url: &str) -> bool {
+    client(2)
+        .get(url)
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
+async fn lmstudio_base() -> String {
+    for port in LMSTUDIO_PORTS {
+        let b = format!("http://127.0.0.1:{port}");
+        if probe(&format!("{b}/v1/models")).await {
+            return b;
+        }
+    }
+    format!("http://127.0.0.1:{}", LMSTUDIO_PORTS[0])
+}
+
+/// Base efectiva: para LM Studio resuelve el puerto real; el resto, la fija.
+async fn effective_base(provider: &str, cfg: &AppConfig) -> String {
+    if provider == "lmstudio" {
+        lmstudio_base().await
+    } else {
+        base(provider, cfg)
     }
 }
 
@@ -127,7 +162,7 @@ pub async fn list_providers(cfg: &AppConfig) -> Vec<ProviderInfo> {
     });
 
     // LM Studio
-    let lm_base = "http://127.0.0.1:1234";
+    let lm_base = lmstudio_base().await;
     let (online, count, note) = match get_json(&format!("{lm_base}/v1/models"), None).await {
         Ok(v) => {
             let n = v["data"].as_array().map(|a| a.len()).unwrap_or(0);
@@ -179,7 +214,7 @@ pub async fn list_providers(cfg: &AppConfig) -> Vec<ProviderInfo> {
 pub async fn list_models(provider: &str, cfg: &AppConfig) -> Result<Vec<ModelInfo>, String> {
     match provider {
         "lmstudio" | "cloud" => {
-            let url = format!("{}/v1/models", base(provider, cfg));
+            let url = format!("{}/v1/models", effective_base(provider, cfg).await);
             let v = get_json(&url, cloud_key().as_deref()).await?;
             let mut out = Vec::new();
             if let Some(arr) = v["data"].as_array() {
@@ -272,12 +307,15 @@ pub async fn chat(req: &ChatRequest, cfg: &AppConfig) -> Result<ChatResponse, St
 async fn chat_ollama(req: &ChatRequest, cfg: &AppConfig) -> Result<ChatResponse, String> {
     let url = format!("{}/api/chat", base("ollama", cfg));
     let started = Instant::now();
-    let body = json!({
+    let mut body = json!({
         "model": req.model,
         "messages": build_messages(req),
         "stream": false,
         "options": { "temperature": req.temperature.unwrap_or(cfg.temperature) }
     });
+    if !cfg.reasoning {
+        body["think"] = json!(false);
+    }
     let resp = client(600)
         .post(&url)
         .json(&body)
@@ -290,7 +328,16 @@ async fn chat_ollama(req: &ChatRequest, cfg: &AppConfig) -> Result<ChatResponse,
         return Err(format!("Ollama HTTP {status}: {text}"));
     }
     let v: Value = resp.json().await.map_err(|e| e.to_string())?;
-    let content = v["message"]["content"].as_str().unwrap_or("").to_string();
+    let content = {
+        let msg = &v["message"];
+        let normal = msg["content"].as_str().unwrap_or("");
+        if normal.trim().is_empty() {
+            // Ollama expone el pensamiento en `thinking` para modelos con razonamiento.
+            msg["thinking"].as_str().unwrap_or("").to_string()
+        } else {
+            normal.to_string()
+        }
+    };
     let prompt_tokens = v["prompt_eval_count"].as_u64().unwrap_or(0);
     let completion_tokens = v["eval_count"].as_u64().unwrap_or(0);
     let total_ms = v["total_duration"]
@@ -306,7 +353,10 @@ async fn chat_ollama(req: &ChatRequest, cfg: &AppConfig) -> Result<ChatResponse,
 }
 
 async fn chat_openai(req: &ChatRequest, cfg: &AppConfig) -> Result<ChatResponse, String> {
-    let url = format!("{}/v1/chat/completions", base(&req.provider, cfg));
+    let url = format!(
+        "{}/v1/chat/completions",
+        effective_base(&req.provider, cfg).await
+    );
     let started = Instant::now();
     let mut body = json!({
         "model": req.model,
@@ -317,21 +367,56 @@ async fn chat_openai(req: &ChatRequest, cfg: &AppConfig) -> Result<ChatResponse,
     if let Some(mt) = req.max_tokens {
         body["max_tokens"] = json!(mt);
     }
+    if !cfg.reasoning {
+        // Solo se pide "no pensar" si el usuario lo desactiva en Configuración.
+        body["chat_template_kwargs"] = json!({ "enable_thinking": false });
+        body["reasoning_effort"] = json!("none");
+    }
     let mut builder = client(600).post(&url).json(&body);
     if let Some(k) = cloud_key() {
         builder = builder.bearer_auth(k);
     }
-    let resp = builder.send().await.map_err(|e| format!("{}: {e}", req.provider))?;
+    let mut resp = builder.send().await.map_err(|e| format!("{}: {e}", req.provider))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("{} HTTP {status}: {text}", req.provider));
+        // Algunos servidores rechazan los campos de razonamiento: se reintenta
+        // sin ellos para no romper el chat por una preferencia opcional.
+        if !cfg.reasoning && status.as_u16() == 400 {
+            let mut retry = client(600).post(&url).json(&json!({
+                "model": req.model,
+                "messages": build_messages(req),
+                "temperature": req.temperature.unwrap_or(cfg.temperature),
+                "stream": false
+            }));
+            if let Some(k) = cloud_key() {
+                retry = retry.bearer_auth(k);
+            }
+            resp = retry
+                .send()
+                .await
+                .map_err(|e| format!("{}: {e}", req.provider))?;
+            if !resp.status().is_success() {
+                let s2 = resp.status();
+                let t2 = resp.text().await.unwrap_or_default();
+                return Err(format!("{} HTTP {s2}: {t2}", req.provider));
+            }
+        } else {
+            return Err(format!("{} HTTP {status}: {text}", req.provider));
+        }
     }
     let v: Value = resp.json().await.map_err(|e| e.to_string())?;
-    let content = v["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let content = {
+        let msg = &v["choices"][0]["message"];
+        let normal = msg["content"].as_str().unwrap_or("");
+        if normal.trim().is_empty() {
+            // Modelos con razonamiento (DeepSeek-R1, JEV, etc.) devuelven el texto
+            // en `reasoning_content` y dejan `content` vacío.
+            msg["reasoning_content"].as_str().unwrap_or("").to_string()
+        } else {
+            normal.to_string()
+        }
+    };
     let prompt_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
     let completion_tokens = v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
     Ok(ChatResponse {
@@ -367,12 +452,15 @@ async fn stream_ollama(
     tx: &UnboundedSender<ChatEvent>,
 ) -> Result<(), String> {
     let url = format!("{}/api/chat", base("ollama", cfg));
-    let body = json!({
+    let mut body = json!({
         "model": req.model,
         "messages": build_messages(req),
         "stream": true,
         "options": { "temperature": req.temperature.unwrap_or(cfg.temperature) }
     });
+    if !cfg.reasoning {
+        body["think"] = json!(false);
+    }
     let resp = client(600)
         .post(&url)
         .json(&body)
@@ -397,6 +485,14 @@ async fn stream_ollama(
                 continue;
             }
             if let Ok(v) = serde_json::from_str::<Value>(line) {
+                // Ollama separa pensamiento (`thinking`) y respuesta (`content`).
+                if let Some(pens) = v["message"]["thinking"].as_str() {
+                    if !pens.is_empty() {
+                        let _ = tx.send(ChatEvent::Reasoning {
+                            text: pens.to_string(),
+                        });
+                    }
+                }
                 if let Some(text) = v["message"]["content"].as_str() {
                     if !text.is_empty() {
                         let _ = tx.send(ChatEvent::Token {
@@ -431,7 +527,10 @@ async fn stream_openai(
     cfg: &AppConfig,
     tx: &UnboundedSender<ChatEvent>,
 ) -> Result<(), String> {
-    let url = format!("{}/v1/chat/completions", base(&req.provider, cfg));
+    let url = format!(
+        "{}/v1/chat/completions",
+        effective_base(&req.provider, cfg).await
+    );
     let started = Instant::now();
     let body = json!({
         "model": req.model,
@@ -470,11 +569,20 @@ async fn stream_openai(
                     return Ok(());
                 }
                 if let Ok(v) = serde_json::from_str::<Value>(data) {
-                    if let Some(text) = v["choices"][0]["delta"]["content"].as_str() {
-                        if !text.is_empty() {
+                    let delta = &v["choices"][0]["delta"];
+                    // El pensamiento va por su canal para que la UI lo muestre aparte.
+                    if let Some(pens) = delta["reasoning_content"].as_str() {
+                        if !pens.is_empty() {
+                            let _ = tx.send(ChatEvent::Reasoning {
+                                text: pens.to_string(),
+                            });
+                        }
+                    }
+                    if let Some(texto) = delta["content"].as_str() {
+                        if !texto.is_empty() {
                             completion_tokens += 1;
                             let _ = tx.send(ChatEvent::Token {
-                                text: text.to_string(),
+                                text: texto.to_string(),
                             });
                         }
                     }

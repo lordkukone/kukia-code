@@ -13,10 +13,11 @@ import History from "./views/History";
 import Tools from "./views/Tools";
 import Tasks from "./views/Tasks";
 import Radar from "./views/Radar";
+import Research from "./views/Research";
 
 export type ViewId =
   | "chat" | "models" | "agents" | "files" | "terminal" | "tasks"
-  | "memory" | "tools" | "gpu" | "benchmarks" | "settings" | "history" | "radar";
+  | "memory" | "tools" | "gpu" | "benchmarks" | "settings" | "history" | "radar" | "research";
 
 const NAV: { id: ViewId; label: string; icon: string }[] = [
   { id: "chat", label: "Chat", icon: "💬" },
@@ -30,6 +31,7 @@ const NAV: { id: ViewId; label: string; icon: string }[] = [
   { id: "gpu", label: "GPU", icon: "📊" },
   { id: "benchmarks", label: "Benchmarks", icon: "⏱️" },
   { id: "radar", label: "Radar", icon: "📡" },
+  { id: "research", label: "Research", icon: "🔬" },
   { id: "history", label: "Historial", icon: "🕘" },
   { id: "settings", label: "Configuración", icon: "⚙️" },
 ];
@@ -190,6 +192,7 @@ export default function App() {
           {view === "tools" && <Tools />}
           {view === "tasks" && <Tasks />}
           {view === "radar" && <Radar notify={notify} />}
+          {view === "research" && <Research notify={notify} />}
         </section>
       </main>
 

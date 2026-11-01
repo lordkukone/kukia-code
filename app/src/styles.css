@@ -256,6 +256,24 @@ textarea { resize: vertical; }
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
 }
 
+/* Research radar */
+.row.wrap { flex-wrap: wrap; }
+.alerts { display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; }
+.alert-item {
+  display: flex; gap: 10px; align-items: center;
+  background: var(--bg-3); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-2); border-radius: 8px; padding: 8px 10px; font-size: 12.5px;
+}
+.alert-item.high { border-left-color: var(--warn); }
+.discoveries { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto; }
+.discovery { background: var(--bg-3); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.discovery summary { cursor: pointer; display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.discovery-body { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; padding-top: 10px; font-size: 12.5px; }
+.kv { display: flex; gap: 8px; }
+.kv > span:first-child { color: var(--muted); min-width: 130px; }
+.kv.span { grid-column: span 2; }
+.kv a { color: var(--accent-2); word-break: break-all; }
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #26323f; border-radius: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
