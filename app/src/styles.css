@@ -301,3 +301,30 @@ textarea { resize: vertical; }
 .preview-pair figure { margin: 0; }
 .preview-pair img { width: 100%; border-radius: 8px; border: 1px solid var(--border); display: block; }
 .preview-pair figcaption { margin-top: 6px; }
+
+/* Aviso global de competencia de VRAM (lo emite el vigilante de fondo). */
+.global-alert {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  background: linear-gradient(90deg, rgba(251, 191, 36, 0.16), rgba(251, 191, 36, 0.04));
+  border-bottom: 1px solid #6f5a1f;
+  border-left: 3px solid var(--warn);
+}
+.global-alert-icon { font-size: 18px; line-height: 1; }
+.global-alert-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.global-alert-text strong { color: var(--warn); font-size: 13px; }
+.global-alert-text span { color: var(--muted); font-size: 12px; }
+.global-alert-close {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  line-height: 1;
+}
+.global-alert-close:hover { color: var(--text); border-color: #35455a; }

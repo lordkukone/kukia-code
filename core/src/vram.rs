@@ -313,6 +313,57 @@ pub fn fits(size_gb: f64, gpu_index: u32) -> Option<(bool, String)> {
     ))
 }
 
+/// Aviso de competencia listo para la interfaz.
+///
+/// Se calcula sin tocar la máquina, para poder probarlo sin red ni motores.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VramAlert {
+    /// Dos o más motores con modelos cargados a la vez.
+    pub competing: bool,
+    /// Motores con al menos un modelo cargado.
+    pub count: usize,
+    /// Detalle legible: `"ollama (1)"`.
+    pub detalle: Vec<String>,
+    /// Modelos cargados en total.
+    pub models: usize,
+    /// Texto listo para mostrar.
+    pub message: String,
+}
+
+/// Decide si hay competencia de VRAM a partir del estado de los motores.
+///
+/// Regla: cuentan solo los motores **con modelos cargados**; un motor encendido pero
+/// vacío no compite por la memoria.
+pub fn evaluar_competencia(engines: &[EngineState]) -> VramAlert {
+    let con_modelos: Vec<&EngineState> = engines.iter().filter(|e| !e.models.is_empty()).collect();
+    let competing = con_modelos.len() > 1;
+    let detalle: Vec<String> = con_modelos
+        .iter()
+        .map(|e| format!("{} ({})", e.engine, e.models.len()))
+        .collect();
+    let models = con_modelos.iter().map(|e| e.models.len()).sum();
+
+    let message = if competing {
+        format!(
+            "COMPETENCIA DE VRAM: {} motores tienen modelos cargados a la vez: {}",
+            con_modelos.len(),
+            detalle.join(", ")
+        )
+    } else if let Some(uno) = detalle.first() {
+        format!("Un solo motor con modelos cargados: {uno}")
+    } else {
+        "Ningún motor tiene modelos cargados.".to_string()
+    };
+
+    VramAlert {
+        competing,
+        count: con_modelos.len(),
+        detalle,
+        models,
+        message,
+    }
+}
+
 /// Informe completo de la guardia.
 pub async fn report() -> VramReport {
     let gpus = gpus_vram();
@@ -323,22 +374,17 @@ pub async fn report() -> VramReport {
         comfyui_state().await,
     ];
 
-    let con_modelos: Vec<&EngineState> = engines.iter().filter(|e| !e.models.is_empty()).collect();
-    let competition = con_modelos.len() > 1;
+    let alerta = evaluar_competencia(&engines);
+    let competition = alerta.competing;
 
     let mut recommendations = Vec::new();
-    let mut warning = String::new();
+    let warning = if competition {
+        alerta.message.clone()
+    } else {
+        String::new()
+    };
 
     if competition {
-        let nombres: Vec<String> = con_modelos
-            .iter()
-            .map(|e| format!("{} ({})", e.engine, e.models.len()))
-            .collect();
-        warning = format!(
-            "COMPETENCIA DE VRAM: {} motores tienen modelos cargados a la vez: {}",
-            con_modelos.len(),
-            nombres.join(", ")
-        );
         recommendations.push(
             "Descarga los modelos de uno de los dos motores antes de seguir: en Fase 2.1 esta \
              situación bajó el rendimiento de 83 tok/s a 0,13 tok/s."
@@ -383,6 +429,60 @@ pub async fn report() -> VramReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn motor(engine: &str, modelos: usize) -> EngineState {
+        EngineState {
+            engine: engine.into(),
+            online: true,
+            note: String::new(),
+            models: (0..modelos)
+                .map(|i| EngineModel {
+                    name: format!("modelo-{i}"),
+                    vram_mb: 1024,
+                    size_gb: 1.0,
+                })
+                .collect(),
+            vram_total_mb: 1024,
+        }
+    }
+
+    #[test]
+    fn dos_motores_con_modelos_disparan_el_aviso() {
+        let a = evaluar_competencia(&[motor("ollama", 1), motor("comfyui", 1)]);
+        assert!(a.competing, "dos motores con modelos deben competir");
+        assert_eq!(a.count, 2);
+        assert_eq!(a.models, 2);
+        assert!(a.message.starts_with("COMPETENCIA DE VRAM"));
+        assert!(a.message.contains("ollama (1)"));
+        assert!(a.message.contains("comfyui (1)"));
+    }
+
+    #[test]
+    fn un_solo_motor_no_es_competencia() {
+        let a = evaluar_competencia(&[motor("ollama", 2), motor("lmstudio", 0)]);
+        assert!(!a.competing, "un motor solo no puede competir consigo mismo");
+        assert_eq!(a.count, 1);
+        assert_eq!(a.models, 2);
+        assert!(a.message.contains("ollama (2)"));
+    }
+
+    #[test]
+    fn motores_encendidos_pero_vacios_no_compiten() {
+        let a = evaluar_competencia(&[motor("ollama", 0), motor("lmstudio", 0), motor("comfyui", 0)]);
+        assert!(!a.competing);
+        assert_eq!(a.count, 0);
+        assert_eq!(a.detalle.len(), 0);
+        assert!(a.message.contains("Ningún motor"));
+    }
+
+    #[test]
+    fn el_aviso_cuenta_modelos_de_todos_los_motores() {
+        let a = evaluar_competencia(&[motor("ollama", 2), motor("lmstudio", 1), motor("comfyui", 3)]);
+        assert!(a.competing);
+        assert_eq!(a.count, 3);
+        assert_eq!(a.models, 6);
+        assert_eq!(a.detalle.len(), 3);
+    }
 
     #[test]
     fn detecta_gpus_reales() {

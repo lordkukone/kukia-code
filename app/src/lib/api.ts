@@ -365,6 +365,15 @@ export interface ProcessOnGpu {
   vram_mb: number;
 }
 
+/** Aviso de competencia entre motores, emitido por el vigilante de fondo. */
+export interface VramAlert {
+  competing: boolean;
+  count: number;
+  detalle: string[];
+  models: number;
+  message: string;
+}
+
 export interface VramReport {
   gpus: GpuVram[];
   engines: EngineState[];

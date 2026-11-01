@@ -1389,6 +1389,38 @@ pub fn run() {
                     let _ = handle.emit("research://update", items.len());
                 }
             });
+
+            // VRAM GUARD DE FONDO — el aviso de competencia salta solo, sin abrir la vista.
+            // Solo lectura: informa por evento y por log; no cierra procesos ni descarga modelos.
+            let handle_vram = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut firma: Option<String> = None;
+                loop {
+                    let rep = vram::report().await;
+                    let alerta = vram::evaluar_competencia(&rep.engines);
+                    let nueva = if alerta.competing {
+                        Some(alerta.detalle.join("|"))
+                    } else {
+                        None
+                    };
+                    if nueva != firma {
+                        match &nueva {
+                            Some(_) => {
+                                logs::append("warn", &format!("vram guard: {}", alerta.message));
+                                let _ = handle_vram.emit("vram://competencia", &alerta);
+                            }
+                            None => {
+                                if firma.is_some() {
+                                    logs::append("info", "vram guard: competencia resuelta");
+                                    let _ = handle_vram.emit("vram://competencia_fin", ());
+                                }
+                            }
+                        }
+                        firma = nueva;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

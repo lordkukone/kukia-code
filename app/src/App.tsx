@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { api, type AppConfig, type ModelInfo, type ProviderInfo, type SystemInfo } from "./lib/api";
+import { listen } from "@tauri-apps/api/event";
+import {
+  api,
+  type AppConfig,
+  type ModelInfo,
+  type ProviderInfo,
+  type SystemInfo,
+  type VramAlert,
+} from "./lib/api";
 import Chat from "./views/Chat";
 import Models from "./views/Models";
 import Agents from "./views/Agents";
@@ -54,6 +62,8 @@ export default function App() {
   const [provider, setProvider] = useState("ollama");
   const [model, setModel] = useState("");
   const [toast, setToast] = useState<string | null>(null);
+  // Aviso de competencia de VRAM: llega del vigilante de fondo, no de la vista.
+  const [vramAlert, setVramAlert] = useState<VramAlert | null>(null);
 
   const notify = (msg: string) => {
     setToast(msg);
@@ -104,6 +114,29 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // El aviso de competencia de VRAM lo emite el vigilante de fondo del núcleo (cada 20 s),
+  // así que salta aunque el usuario esté en Chat o en cualquier otra vista.
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let offFin: (() => void) | undefined;
+    (async () => {
+      try {
+        off = await listen<VramAlert>("vram://competencia", (e) => {
+          setVramAlert(e.payload);
+          notify(`⚠️ ${e.payload.message}`);
+        });
+        offFin = await listen("vram://competencia_fin", () => setVramAlert(null));
+      } catch (e) {
+        notify(`No se pudo suscribir al aviso de VRAM: ${e}`);
+      }
+    })();
+    return () => {
+      off?.();
+      offFin?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const selectProvider = async (id: string) => {
     setProvider(id);
     await loadModels(id);
@@ -129,7 +162,7 @@ export default function App() {
           <div className="brand-logo">K</div>
           <div>
             <div className="brand-name">KUKIA CODE</div>
-            <div className="brand-sub">v0.1.0 · Fase 2</div>
+            <div className="brand-sub">v0.1.0 · Fase 3</div>
           </div>
         </div>
         <nav>
@@ -150,6 +183,28 @@ export default function App() {
       </aside>
 
       <main className="main">
+        {vramAlert && (
+          <div className="global-alert" role="alert">
+            <span className="global-alert-icon">⚠️</span>
+            <div className="global-alert-text">
+              <strong>{vramAlert.message}</strong>
+              <span>
+                El rendimiento se hunde cuando dos motores comparten VRAM (83 → 0,13 tok/s en
+                Fase 2.1). Descarga un modelo antes de seguir.
+              </span>
+            </div>
+            <button className="btn small" onClick={() => setView("vram")}>
+              Abrir VRAM Guard
+            </button>
+            <button
+              className="global-alert-close"
+              title="Ocultar hasta el próximo aviso"
+              onClick={() => setVramAlert(null)}
+            >
+              ✕
+            </button>
+          </div>
+        )}
         <header className="topbar">
           <div className="topbar-left">
             <span className="chip">{provider}</span>
