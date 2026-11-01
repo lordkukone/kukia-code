@@ -1,0 +1,26 @@
+# Dependencias
+node_modules/
+core/target/
+src-tauri/target/
+target/
+
+# Build
+dist/
+
+# Datos locales y secretos
+config/*.json
+logs/*.log
+backups/*
+benchmarks/*
+*.db
+*.sqlite
+.env
+.env.*
+
+# Sistema
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Informes privados
+INFORMES/*.local.md

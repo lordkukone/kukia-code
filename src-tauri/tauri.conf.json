@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "KUKIA CODE",
+  "version": "0.1.0",
+  "identifier": "com.kukia.code",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "KUKIA CODE",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1100,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "theme": "Dark"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "publisher": "KUKIA",
+    "shortDescription": "Asistente de IA de escritorio",
+    "longDescription": "KUKIA CODE: interfaz de escritorio con motor de agentes, memoria persistente, selector universal de modelos y monitor GPU.",
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "languages": ["Spanish", "English"]
+      }
+    }
+  }
+}
