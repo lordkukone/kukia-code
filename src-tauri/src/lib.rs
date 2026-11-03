@@ -1,6 +1,6 @@
 use kukia_core::{
-    agents, bridge, catalog, config, control, ecosystem, engines, gaming, gpu, hub, jobs, lab, logs,
-    mcp, registry, serve, tools, xoxete,
+    agents, bridge, catalog, config, control, ecosystem, engines, entrenador, gaming, gpu, hub, jobs,
+    lab, logs, mcp, registry, serve, tools, xoxete,
     memory::{AgentPolicy, AuditRow, Database, GamingAlertRow, GamingItem, Project},
     permissions, providers, radar, research, security, vram,
 };
@@ -2673,6 +2673,96 @@ fn studio_cortar_plano(
     kukia_core::studio::detect::partir_plano(&ruta, inicio, segundos, &destino)
 }
 
+/* ------------------------- Entrenador de LoRA (LA8) ------------------------- */
+
+#[tauri::command]
+fn entrenador_proyectos(state: State<'_, AppState>) -> Vec<entrenador::Proyecto> {
+    entrenador::proyectos(&guard(&state.db))
+}
+
+#[tauri::command]
+fn entrenador_proyecto_crear(
+    state: State<'_, AppState>,
+    nombre: String,
+    clase: String,
+    modelo_base: String,
+) -> Result<entrenador::Proyecto, String> {
+    entrenador::proyecto_crear(&guard(&state.db), &nombre, &clase, &modelo_base)
+}
+
+#[tauri::command]
+fn entrenador_imagenes(state: State<'_, AppState>, proyecto: String) -> Vec<entrenador::Imagen> {
+    entrenador::imagenes(&guard(&state.db), &proyecto)
+}
+
+#[tauri::command]
+fn entrenador_importar_carpeta(
+    state: State<'_, AppState>,
+    proyecto: String,
+    carpeta: String,
+) -> Result<Vec<entrenador::Imagen>, String> {
+    entrenador::importar_carpeta(&guard(&state.db), &proyecto, &carpeta)
+}
+
+#[tauri::command]
+fn entrenador_caption(state: State<'_, AppState>, id: i64, texto: String) -> Result<(), String> {
+    entrenador::caption(&guard(&state.db), id, &texto)
+}
+
+/// Describe una imagen con un modelo de visión local y la propone como caption.
+/// No la guarda: la interfaz decide si aceptarla.
+#[tauri::command]
+async fn entrenador_caption_auto(
+    state: State<'_, AppState>,
+    id: i64,
+    proyecto: String,
+    modelo: String,
+) -> Result<String, String> {
+    let (archivo, actual) = {
+        let db = guard(&state.db);
+        let lista = entrenador::imagenes(&db, &proyecto);
+        let img = lista
+            .iter()
+            .find(|i| i.id == id)
+            .ok_or_else(|| format!("no hay imagen con id {id}"))?;
+        (img.archivo.clone(), entrenador::caption_de(&db, id).unwrap_or_default())
+    };
+    let _ = actual;
+    let ruta = entrenador::dir_dataset(&proyecto).join(archivo);
+    entrenador::caption_auto(&ruta, &modelo).await
+}
+
+#[tauri::command]
+fn entrenador_preflight(
+    state: State<'_, AppState>,
+    proyecto: String,
+) -> Result<entrenador::Preflight, String> {
+    entrenador::preflight(&guard(&state.db), &proyecto)
+}
+
+#[tauri::command]
+fn entrenador_iniciar(
+    state: State<'_, AppState>,
+    cfg: entrenador::RunCfg,
+) -> Result<entrenador::Run, String> {
+    entrenador::entrenar(state.db.clone(), &cfg)
+}
+
+#[tauri::command]
+fn entrenador_run(state: State<'_, AppState>, id: i64) -> Result<Option<entrenador::Run>, String> {
+    entrenador::run(state.db.clone(), id)
+}
+
+#[tauri::command]
+fn entrenador_runs(state: State<'_, AppState>, proyecto: String) -> Vec<entrenador::Run> {
+    entrenador::runs(&guard(&state.db), &proyecto)
+}
+
+#[tauri::command]
+fn entrenador_cancelar(state: State<'_, AppState>, id: i64) -> bool {
+    entrenador::cancelar(state.db.clone(), id)
+}
+
 /* ------------------------- Logs ------------------------- */
 
 #[tauri::command]
@@ -2892,6 +2982,17 @@ pub fn run() {
             catalog_binds,
             catalog_bind_clear,
             catalog_chat,
+            entrenador_proyectos,
+            entrenador_proyecto_crear,
+            entrenador_imagenes,
+            entrenador_importar_carpeta,
+            entrenador_caption,
+            entrenador_caption_auto,
+            entrenador_preflight,
+            entrenador_iniciar,
+            entrenador_run,
+            entrenador_runs,
+            entrenador_cancelar,
             mcp_servers,
             mcp_grant,
             mcp_discover,

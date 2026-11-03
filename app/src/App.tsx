@@ -33,13 +33,14 @@ import ModelHub from "./views/ModelHub";
 import Bridge from "./views/Bridge";
 import Ecosystem from "./views/Ecosystem";
 import Universal from "./views/Universal";
+import Entrenador from "./views/Entrenador";
 import Xoxete from "./views/Xoxete";
 
 export type ViewId =
   | "chat" | "models" | "agents" | "files" | "terminal" | "tasks"
   | "memory" | "tools" | "gpu" | "benchmarks" | "settings" | "history" | "radar"
   | "research" | "security" | "anime" | "reality" | "vram" | "gaming" | "lab"
-  | "catalog" | "hub" | "bridge" | "ecosystem" | "universal" | "xoxete";
+  | "catalog" | "hub" | "bridge" | "ecosystem" | "universal" | "xoxete" | "entrenador";
 
 const NAV: { id: ViewId; label: string; icon: string }[] = [
   { id: "chat", label: "Chat", icon: "💬" },
@@ -65,6 +66,7 @@ const NAV: { id: ViewId; label: string; icon: string }[] = [
   { id: "reality", label: "Convertidor", icon: "🔁" },
   { id: "vram", label: "VRAM Guard", icon: "🧯" },
   { id: "lab", label: "Laboratorio", icon: "🧪" },
+  { id: "entrenador", label: "Entrenador LoRA", icon: "🎓" },
   { id: "gaming", label: "Gaming Radar", icon: "🎮" },
   { id: "history", label: "Historial", icon: "🕘" },
   { id: "settings", label: "Configuración", icon: "⚙️" },
@@ -286,6 +288,7 @@ export default function App() {
           {view === "ecosystem" && <Ecosystem notify={notify} />}
           {view === "universal" && <Universal notify={notify} />}
           {view === "xoxete" && <Xoxete notify={notify} />}
+          {view === "entrenador" && <Entrenador notify={notify} />}
         </section>
       </main>
 

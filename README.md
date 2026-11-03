@@ -60,6 +60,9 @@ usa si no se autoriza. Se puede fijar un modelo por ámbito a mano.
 ### Lo demás
 
 - Memoria persistente con búsqueda.
+- **Entrenador de LoRA**: dataset con captions (a mano o con un modelo de visión
+  local), comprobación de VRAM y entrenamiento real con PyTorch (diffusers + peft),
+  con el progreso leído del proceso y salida en formato kohya para ComfyUI.
 - Panel de VRAM con guarda antes de cargar y descarga selectiva, con tarjetas
   **NVIDIA, AMD e Intel** (DXGI + contadores de Windows; temperatura, potencia y
   relojes solo cuando el fabricante los publica).

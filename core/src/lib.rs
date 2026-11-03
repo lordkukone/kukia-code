@@ -11,6 +11,7 @@ pub mod config;
 pub mod control;
 pub mod ecosystem;
 pub mod engines;
+pub mod entrenador;
 pub mod gaming;
 pub mod gpu;
 pub mod gpus;

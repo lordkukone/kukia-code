@@ -840,6 +840,63 @@ export interface GamingScan {
   informe: string;
 }
 
+/* ============ Entrenador de LoRA (LA8) ============ */
+
+export interface EntrenadorProyecto {
+  id: string;
+  nombre: string;
+  clase: string;
+  modelo_base: string;
+  notas: string;
+  creado: string;
+  imagenes: number;
+  con_caption: number;
+}
+
+export interface EntrenadorImagen {
+  id: number;
+  proyecto: string;
+  archivo: string;
+  caption: string;
+  ancho: number;
+  alto: number;
+  creado: string;
+}
+
+export interface EntrenadorPreflight {
+  proyecto: string;
+  imagenes: number;
+  con_caption: number;
+  dataset_dir: string;
+  vram_total_mb: number;
+  vram_libre_mb: number;
+  puede: boolean;
+  avisos: string[];
+  comprobado: string;
+}
+
+export interface EntrenadorRun {
+  id: number;
+  proyecto: string;
+  estado: string;
+  paso: number;
+  total: number;
+  perdida: number;
+  salida: string;
+  log: string;
+  iniciado: string;
+  terminado: string;
+}
+
+export interface EntrenadorCfg {
+  proyecto: string;
+  pasos: number;
+  rango: number;
+  resolucion: number;
+  modelo: string;
+  probar: boolean;
+}
+
 /* ============ Invocaciones ============ */
 
 export const api = {
@@ -848,6 +905,26 @@ export const api = {
   models: (provider: string) => invoke<ModelInfo[]>("list_models", { provider }),
   chat: (request: ChatRequest) => invoke<ChatResponse>("chat", { request }),
   gpuStats: () => invoke<GpuStat[]>("gpu_stats"),
+
+  entrenadorProyectos: () => invoke<EntrenadorProyecto[]>("entrenador_proyectos"),
+  entrenadorCrear: (nombre: string, clase: string, modeloBase: string) =>
+    invoke<EntrenadorProyecto>("entrenador_proyecto_crear", { nombre, clase, modeloBase }),
+  entrenadorImagenes: (proyecto: string) =>
+    invoke<EntrenadorImagen[]>("entrenador_imagenes", { proyecto }),
+  entrenadorImportar: (proyecto: string, carpeta: string) =>
+    invoke<EntrenadorImagen[]>("entrenador_importar_carpeta", { proyecto, carpeta }),
+  entrenadorCaption: (id: number, texto: string) =>
+    invoke<void>("entrenador_caption", { id, texto }),
+  entrenadorCaptionAuto: (id: number, proyecto: string, modelo: string) =>
+    invoke<string>("entrenador_caption_auto", { id, proyecto, modelo }),
+  entrenadorPreflight: (proyecto: string) =>
+    invoke<EntrenadorPreflight>("entrenador_preflight", { proyecto }),
+  entrenadorIniciar: (cfg: EntrenadorCfg) =>
+    invoke<EntrenadorRun>("entrenador_iniciar", { cfg }),
+  entrenadorRun: (id: number) => invoke<EntrenadorRun | null>("entrenador_run", { id }),
+  entrenadorRuns: (proyecto: string) =>
+    invoke<EntrenadorRun[]>("entrenador_runs", { proyecto }),
+  entrenadorCancelar: (id: number) => invoke<boolean>("entrenador_cancelar", { id }),
 
   sessions: () => invoke<Session[]>("sessions_list"),
   createSession: (title: string, agent: string) =>
