@@ -7,7 +7,7 @@ herramientas para trabajar y no manda nada a ningún sitio si tú no lo pides.
 Interfaz en **React + TypeScript** sobre **Tauri 2**; núcleo en **Rust**
 (`core/`), independiente de la interfaz. Memoria persistente en **SQLite**.
 
-> Copyright © 2026 Xoxete (GitHub: [@lordkukone](https://github.com/lordkukone)).
+> Copyright © 2026 **RMR (LordKukone)** — https://github.com/lordkukone.
 > **Todos los derechos reservados.** Ver [`LICENSE`](LICENSE).
 > La publicación del código no cede ningún derecho: se permite consultarlo y
 > estudiarlo, no copiarlo, modificarlo ni redistribuirlo.
@@ -113,5 +113,5 @@ implementación interna no es la original.
 
 ## Autoría
 
-Diseño, código y documentación: **Xoxete** ([@lordkukone](https://github.com/lordkukone)).
-© 2026. Todos los derechos reservados. Ver [`LICENSE`](LICENSE).
+Diseño, código y documentación: **RMR (LordKukone)** ([@lordkukone](https://github.com/lordkukone)).
+© 2026 RMR (LordKukone). Todos los derechos reservados. Ver el aviso completo en [`LICENSE`](LICENSE).
