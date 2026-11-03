@@ -23,17 +23,32 @@ import Tasks from "./views/Tasks";
 import Radar from "./views/Radar";
 import Research from "./views/Research";
 import AnimeReal from "./views/AnimeReal";
+import Reality from "./views/Reality";
 import Vram from "./views/Vram";
+import Lab from "./views/Lab";
 import Gaming from "./views/Gaming";
 import Security from "./views/Security";
+import Catalog from "./views/Catalog";
+import ModelHub from "./views/ModelHub";
+import Bridge from "./views/Bridge";
+import Ecosystem from "./views/Ecosystem";
+import Universal from "./views/Universal";
+import Xoxete from "./views/Xoxete";
 
 export type ViewId =
   | "chat" | "models" | "agents" | "files" | "terminal" | "tasks"
   | "memory" | "tools" | "gpu" | "benchmarks" | "settings" | "history" | "radar"
-  | "research" | "security" | "anime" | "vram" | "gaming";
+  | "research" | "security" | "anime" | "reality" | "vram" | "gaming" | "lab"
+  | "catalog" | "hub" | "bridge" | "ecosystem" | "universal" | "xoxete";
 
 const NAV: { id: ViewId; label: string; icon: string }[] = [
   { id: "chat", label: "Chat", icon: "💬" },
+  { id: "catalog", label: "Cerebro", icon: "🧿" },
+  { id: "hub", label: "Model Hub", icon: "⬇️" },
+  { id: "ecosystem", label: "Ecosistema IA", icon: "🌐" },
+  { id: "universal", label: "Ecosistema Universal", icon: "🧩" },
+  { id: "bridge", label: "Puente OpenCode", icon: "🔗" },
+  { id: "xoxete", label: "Xoxete", icon: "💜" },
   { id: "models", label: "Modelos", icon: "🧠" },
   { id: "agents", label: "Agentes", icon: "🤖" },
   { id: "files", label: "Archivos", icon: "📁" },
@@ -47,7 +62,9 @@ const NAV: { id: ViewId; label: string; icon: string }[] = [
   { id: "radar", label: "Radar", icon: "📡" },
   { id: "research", label: "Research", icon: "🔬" },
   { id: "anime", label: "Anime ↔ Real", icon: "🎬" },
+  { id: "reality", label: "Convertidor", icon: "🔁" },
   { id: "vram", label: "VRAM Guard", icon: "🧯" },
+  { id: "lab", label: "Laboratorio", icon: "🧪" },
   { id: "gaming", label: "Gaming Radar", icon: "🎮" },
   { id: "history", label: "Historial", icon: "🕘" },
   { id: "settings", label: "Configuración", icon: "⚙️" },
@@ -253,14 +270,22 @@ export default function App() {
             <Settings config={config} onSaved={setConfig} notify={notify} />
           )}
           {view === "history" && <History notify={notify} />}
-          {view === "tools" && <Tools />}
-          {view === "tasks" && <Tasks />}
+          {view === "tools" && <Tools notify={notify} />}
+          {view === "tasks" && <Tasks notify={notify} />}
           {view === "security" && <Security notify={notify} />}
           {view === "radar" && <Radar notify={notify} />}
           {view === "research" && <Research notify={notify} />}
           {view === "anime" && <AnimeReal notify={notify} />}
+          {view === "reality" && <Reality notify={notify} />}
           {view === "vram" && <Vram notify={notify} />}
+          {view === "lab" && <Lab notify={notify} />}
           {view === "gaming" && <Gaming notify={notify} />}
+          {view === "catalog" && <Catalog notify={notify} />}
+          {view === "hub" && <ModelHub notify={notify} />}
+          {view === "bridge" && <Bridge notify={notify} />}
+          {view === "ecosystem" && <Ecosystem notify={notify} />}
+          {view === "universal" && <Universal notify={notify} />}
+          {view === "xoxete" && <Xoxete notify={notify} />}
         </section>
       </main>
 

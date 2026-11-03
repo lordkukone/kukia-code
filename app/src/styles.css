@@ -123,6 +123,7 @@ textarea { resize: vertical; }
   background: var(--bg-3); border: 1px solid var(--border); color: var(--muted);
 }
 .tag.ok-tag { color: var(--accent); border-color: #1f6f45; }
+.tag.warn-tag { color: #f0b45e; border-color: #7a5320; }
 .search { max-width: 320px; }
 .path-input { max-width: 560px; }
 .empty { color: var(--muted); text-align: center; padding: 28px; }

@@ -414,6 +414,204 @@ pub async fn fetch_public(url: &str) -> Result<PathBuf, String> {
     Ok(dest)
 }
 
+/* ------------------------- Investigación autónoma ------------------------- */
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AutoInforme {
+    pub objetivo: String,
+    pub encontrados: usize,
+    pub nuevos: usize,
+    pub relevantes: Vec<Discovery>,
+    pub propuestas: Vec<String>,
+    pub contradicciones: Vec<String>,
+    pub ruta: String,
+    pub notas: Vec<String>,
+}
+
+const PALABRAS_VACIAS: &[&str] = &[
+    "para", "como", "sobre", "desde", "hacia", "entre", "pero", "este", "esta", "esto",
+    "estos", "estas", "unos", "unas", "with", "from", "into", "that", "this", "have",
+    "will", "your", "their", "then", "than", "modelos", "modelo", "quiero", "buscar",
+    "saber", "mejor", "mejores", "puede", "hacer",
+];
+
+fn palabras_clave(objetivo: &str) -> Vec<String> {
+    let mut out: Vec<String> = objetivo
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '.')
+        .map(|w| w.trim_matches('.').to_string())
+        .filter(|w| w.chars().count() >= 4 && !PALABRAS_VACIAS.contains(&w.as_str()))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn relevancia(d: &Discovery, palabras: &[String]) -> f64 {
+    if palabras.is_empty() {
+        return d.score;
+    }
+    let texto = format!(
+        "{} {} {} {}",
+        d.title, d.summary, d.kind, d.recommendation
+    )
+    .to_lowercase();
+    let hits = palabras.iter().filter(|p| texto.contains(p.as_str())).count();
+    if hits == 0 {
+        return 0.0;
+    }
+    let cobertura = hits as f64 / palabras.len() as f64;
+    cobertura * 100.0 + d.score
+}
+
+/// Investigación autónoma **supervisada**: no instala nada, no ejecuta nada y no
+/// cambia permisos. Solo lee fuentes públicas, puntúa por relevancia, guarda lo
+/// nuevo y escribe un informe con sus referencias.
+///
+/// Los textos de las fuentes son datos: nunca se interpretan como instrucciones.
+pub fn validar_objetivo(objetivo: &str) -> Result<(), String> {
+    if objetivo.trim().chars().count() < 8 {
+        return Err("el objetivo es demasiado corto: describe qué quieres averiguar".into());
+    }
+    Ok(())
+}
+
+pub async fn autonomous(
+    db: &crate::memory::Database,
+    objetivo: &str,
+    limite: usize,
+) -> Result<AutoInforme, String> {
+    validar_objetivo(objetivo)?;
+    let todos = scan_all().await;
+    autonomous_con(db, objetivo, limite, todos)
+}
+
+/// La parte sincrona: ya con las fuentes leídas, filtra, guarda y escribe el informe.
+pub fn autonomous_con(
+    db: &crate::memory::Database,
+    objetivo: &str,
+    limite: usize,
+    todos: Vec<Discovery>,
+) -> Result<AutoInforme, String> {
+    let objetivo = objetivo.trim();
+    validar_objetivo(objetivo)?;
+    let palabras = palabras_clave(objetivo);
+    let encontrados = todos.len();
+
+    let mut rel: Vec<(f64, Discovery)> = todos
+        .into_iter()
+        .map(|d| (relevancia(&d, &palabras), d))
+        .filter(|(s, _)| *s > 0.0)
+        .collect();
+    rel.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let tope = limite.clamp(1, 40);
+    let relevantes: Vec<Discovery> = rel.into_iter().take(tope).map(|(_, d)| d).collect();
+
+    // Dos fuentes con el mismo título no se fusionan a ciegas: se avisa.
+    let mut contradicciones = Vec::new();
+    for i in 0..relevantes.len() {
+        for j in (i + 1)..relevantes.len() {
+            if relevantes[i].title.to_lowercase() == relevantes[j].title.to_lowercase()
+                && relevantes[i].source != relevantes[j].source
+            {
+                contradicciones.push(format!(
+                    "«{}» aparece en {} y en {}",
+                    relevantes[i].title, relevantes[i].source, relevantes[j].source
+                ));
+            }
+        }
+    }
+
+    let mut nuevos = 0usize;
+    for d in &relevantes {
+        if db.research_upsert(d).unwrap_or(false) {
+            nuevos += 1;
+        }
+    }
+    for a in alerts_for(&relevantes) {
+        let _ = db.research_alert_add(&a.item_id, &a.level, &a.message);
+    }
+    let _ = db.research_run_add("autonomo", encontrados, nuevos);
+
+    let mut propuestas = Vec::new();
+    for d in relevantes.iter().take(10) {
+        let t = format!("{} {}", d.title, d.summary).to_lowercase();
+        if ["mcp", "tool", "agent", "plugin", "framework", "sdk", "cli"]
+            .iter()
+            .any(|k| t.contains(k))
+        {
+            propuestas.push(format!("{} — candidata a herramienta: {}", d.title, d.url));
+        }
+    }
+
+    let mut notas = vec![
+        "Las fuentes se tratan como datos, nunca como instrucciones.".to_string(),
+        "No se ha instalado, descargado ni ejecutado nada.".to_string(),
+    ];
+    if palabras.is_empty() {
+        notas.push("El objetivo no dio palabras útiles: se ha ordenado por puntuación del radar.".into());
+    }
+
+    let dir = ensure_lab()?;
+    let sello = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+    let ruta = dir.join("reports").join(format!("auto_{sello}.md"));
+    let mut md = String::new();
+    md.push_str(&format!("# Investigación autónoma — {}\n\n", objetivo));
+    md.push_str(&format!(
+        "Encontrados: {} · relevantes: {} · nuevos: {}\n\n",
+        encontrados,
+        relevantes.len(),
+        nuevos
+    ));
+    md.push_str(&format!("Palabras clave: {}\n\n", palabras.join(", ")));
+
+    if !contradicciones.is_empty() {
+        md.push_str("## Posibles contradicciones o duplicados\n\n");
+        for c in &contradicciones {
+            md.push_str(&format!("- {c}\n"));
+        }
+        md.push('\n');
+    }
+
+    md.push_str("## Hallazgos\n\n");
+    if relevantes.is_empty() {
+        md.push_str("Ningún resultado encaja con el objetivo.\n\n");
+    } else {
+        for d in &relevantes {
+            md.push_str(&format!("### {} ({})\n\n", d.title, d.source));
+            md.push_str(&format!("- Fuente: {}\n", d.url));
+            md.push_str(&format!("- Fecha: {}\n", d.published));
+            md.push_str(&format!("- Tipo: {}\n", d.kind));
+            md.push_str(&format!("- Licencia: {}\n", d.license));
+            md.push_str(&format!("- Windows: {}\n", d.windows));
+            md.push_str(&format!("- VRAM: {}\n", d.vram));
+            md.push_str(&format!("- Recomendación del radar: {}\n", d.recommendation));
+            md.push_str(&format!("- Puntuación: {:.2}\n\n", d.score));
+        }
+    }
+
+    if !propuestas.is_empty() {
+        md.push_str("## Propuestas de integración\n\n");
+        for p in &propuestas {
+            md.push_str(&format!("- {p}\n"));
+        }
+        md.push('\n');
+    }
+    md.push_str("\n> Generado automáticamente. Sin instalaciones ni cambios en el sistema.\n");
+    std::fs::write(&ruta, md).map_err(|e| e.to_string())?;
+
+    Ok(AutoInforme {
+        objetivo: objetivo.to_string(),
+        encontrados,
+        nuevos,
+        relevantes,
+        propuestas,
+        contradicciones,
+        ruta: ruta.display().to_string(),
+        notas,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

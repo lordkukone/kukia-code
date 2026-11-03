@@ -168,17 +168,14 @@ pub async fn status(base: &str) -> ComfyStatus {
 }
 
 /// Nombres de modelos que ComfyUI ve ahora mismo (checkpoints, LoRAs, unets, VAEs, clip vision).
+///
+/// Se pregunta nodo por nodo (`/object_info/<clase>`) en vez de pedir el volcado completo:
+/// en esta instalación `/object_info` son 22 MB y el análisis tardaba 32 s, con lo que la
+/// vista entera se quedaba esperando. Por nodo son unos pocos KB y responde al instante.
 pub async fn modelos_visibles(base: &str) -> Result<Vec<String>, String> {
-    let obj: Value = cliente(60)
-        .get(format!("{base}/object_info"))
-        .send()
-        .await
-        .map_err(|e| format!("object_info: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("object_info ilegible: {e}"))?;
-
     let mut out = Vec::new();
+    let mut fallos = 0usize;
+
     for (clase, campo) in [
         ("CheckpointLoaderSimple", "ckpt_name"),
         ("LoraLoaderModelOnly", "lora_name"),
@@ -186,9 +183,31 @@ pub async fn modelos_visibles(base: &str) -> Result<Vec<String>, String> {
         ("UNETLoader", "unet_name"),
         ("UnetLoaderGGUF", "unet_name"),
         ("VAELoader", "vae_name"),
+        // Los text encoders también son modelos que faltan o están: sin esto el
+        // diagnóstico del convertidor daba por ausente el umt5 que sí está.
+        ("CLIPLoader", "clip_name"),
         ("CLIPVisionLoader", "clip_name"),
         ("IPAdapterModelLoader", "ipadapter_file"),
     ] {
+        let respuesta = match cliente(15)
+            .get(format!("{base}/object_info/{clase}"))
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => r,
+            Ok(_) => continue,
+            Err(_) => {
+                fallos += 1;
+                continue;
+            }
+        };
+        let obj: Value = match respuesta.json().await {
+            Ok(v) => v,
+            Err(_) => {
+                fallos += 1;
+                continue;
+            }
+        };
         if let Some(arr) = obj
             .get(clase)
             .and_then(|c| c.get("input"))
@@ -204,6 +223,13 @@ pub async fn modelos_visibles(base: &str) -> Result<Vec<String>, String> {
             }
         }
     }
+
+    // Si no se pudo preguntar a ningún nodo, es que ComfyUI no responde: se propaga
+    // el error para que la interfaz diga la verdad en vez de «faltan todos los modelos».
+    if out.is_empty() && fallos > 0 {
+        return Err(format!("ComfyUI no respondió al listar modelos ({fallos} consultas fallidas)"));
+    }
+
     out.sort();
     out.dedup();
     Ok(out)
@@ -355,7 +381,7 @@ fn parchear(wf: &mut Value, t: &Template, req: &ConvertRequest, seed: i64) -> Re
     Ok(())
 }
 
-fn b64(datos: &[u8]) -> String {
+pub fn b64(datos: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((datos.len() + 2) / 3 * 4);
     for trozo in datos.chunks(3) {

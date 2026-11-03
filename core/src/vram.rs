@@ -4,11 +4,14 @@
 //! motores de inferencia ocupan la misma GPU.
 //!
 //! Reglas:
-//! - Solo lectura: no cierra procesos, no descarga modelos, no toca configuraciones.
+//! - La guardia solo LEE: no cierra procesos, no toca configuraciones y no descarga
+//!   nada por su cuenta.
+//! - La descarga ocurre **solo** cuando el usuario pulsa «Expulsar» o «Vaciar VRAM»,
+//!   y siempre por el mecanismo oficial de cada motor.
 //! - Informa y avisa; la decisión es del usuario.
 //! - La GPU 0 sigue siendo la principal de pantalla y juegos.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::process::Command;
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +58,10 @@ pub struct VramReport {
     pub warning: String,
     pub recommendations: Vec<String>,
     pub checked_at: String,
+    /// Trabajos que ComfyUI tiene en ejecución o en cola. Liberar su VRAM los
+    /// interrumpe, así que la UI pide confirmación explícita cuando esto es > 0.
+    #[serde(default)]
+    pub comfy_busy: usize,
 }
 
 fn now() -> String {
@@ -215,7 +222,11 @@ async fn lmstudio_state() -> EngineState {
                     return EngineState {
                         engine: "lmstudio".into(),
                         online: true,
-                        note: format!("puerto {port}: {} cargado(s)", models.len()),
+                        note: format!(
+                            "puerto {port}: {} cargado(s) · LM Studio no publica la VRAM de cada \
+                             modelo, así que las cifras por GPU salen de nvidia-smi",
+                            models.len()
+                        ),
                         models,
                         vram_total_mb: 0,
                     };
@@ -364,14 +375,51 @@ pub fn evaluar_competencia(engines: &[EngineState]) -> VramAlert {
     }
 }
 
+/* ================== Motores sin API de descarga (Wan2GP / Maestro) ================== */
+
+fn base_wan2gp() -> String {
+    std::env::var("KUKIA_WAN2GP").unwrap_or_else(|_| "http://127.0.0.1:7861".to_string())
+}
+
+fn base_maestro() -> String {
+    std::env::var("KUKIA_MAESTRO").unwrap_or_else(|_| "http://127.0.0.1:7860".to_string())
+}
+
+/// Sondea un motor que **no** publica su inventario de modelos en memoria.
+///
+/// Wan2GP (Gradio) y Maestro no exponen ni qué modelo tienen cargado ni una ruta
+/// para descargarlo: la única forma de liberar su VRAM sería cerrar el proceso, y
+/// KUKIA no cierra procesos. Se dice tal cual en vez de inventar un botón que no
+/// puede funcionar.
+async fn motor_sin_api(engine: &str, etiqueta: &str, base: &str) -> EngineState {
+    let vivo = match client(2).get(format!("{base}/" )).send().await {
+        Ok(r) => r.status().is_success() || r.status().is_redirection(),
+        Err(_) => false,
+    };
+    EngineState {
+        engine: engine.into(),
+        online: vivo,
+        note: if vivo {
+            format!("{etiqueta} responde en {base} · no publica qué modelo tiene cargado ni tiene descarga por API")
+        } else {
+            format!("{etiqueta} sin respuesta en {base}")
+        },
+        models: Vec::new(),
+        vram_total_mb: 0,
+    }
+}
+
 /// Informe completo de la guardia.
 pub async fn report() -> VramReport {
     let gpus = gpus_vram();
+    let comfy_busy = comfyui_generando().await.unwrap_or(0);
     let processes = gpu_processes();
     let engines = vec![
         ollama_state().await,
         lmstudio_state().await,
         comfyui_state().await,
+        motor_sin_api("wan2gp", "Wan2GP", &base_wan2gp()).await,
+        motor_sin_api("maestro", "Maestro", &base_maestro()).await,
     ];
 
     let alerta = evaluar_competencia(&engines);
@@ -412,7 +460,18 @@ pub async fn report() -> VramReport {
     }
 
     if !engines.iter().any(|e| e.online) {
-        recommendations.push("Ningún motor responde: Ollama en 11434, LM Studio en 1234/1235 y ComfyUI en 8188.".into());
+        recommendations.push(
+            "Ningún motor responde: Ollama en 11434, LM Studio en 1234/1235, ComfyUI en 8188, \
+             Wan2GP en 7861 y Maestro en 7860."
+                .into(),
+        );
+    }
+
+    if comfy_busy > 0 {
+        recommendations.push(format!(
+            "ComfyUI tiene {comfy_busy} trabajo(s) en marcha: liberar su VRAM los interrumpe. \
+             Espera a que termine o confirma que quieres cortarlos."
+        ));
     }
 
     VramReport {
@@ -423,7 +482,754 @@ pub async fn report() -> VramReport {
         warning,
         recommendations,
         checked_at: now(),
+        comfy_busy,
     }
+}
+
+/* ============================ Expulsar modelos ============================ */
+
+/// Resultado de intentar sacar un modelo de la memoria.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnloadResult {
+    pub engine: String,
+    pub model: String,
+    pub ok: bool,
+    pub message: String,
+}
+
+fn resultado(engine: &str, model: &str, ok: bool, message: impl Into<String>) -> UnloadResult {
+    UnloadResult {
+        engine: engine.into(),
+        model: model.into(),
+        ok,
+        message: message.into(),
+    }
+}
+
+/// Recorta respuestas de error para no volcar cuerpos enormes en la interfaz.
+fn recortar(s: &str) -> String {
+    let t = s.trim().replace(['\n', '\r'], " ");
+    if t.chars().count() > 160 {
+        format!("{}…", t.chars().take(160).collect::<String>())
+    } else {
+        t
+    }
+}
+
+/// Ollama descarga con `keep_alive: 0`: deja de retener el modelo al terminar la
+/// petición. Comprobado en esta máquina: la ruta existe (un modelo inexistente
+/// devuelve el 404 del modelo, no un 404 de ruta).
+async fn unload_ollama(model: &str) -> UnloadResult {
+    let body = serde_json::json!({ "model": model, "keep_alive": 0, "stream": false });
+    match client(30)
+        .post("http://127.0.0.1:11434/api/generate")
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => resultado(
+            "ollama",
+            model,
+            true,
+            "descargado de VRAM (keep_alive 0)",
+        ),
+        Ok(r) => {
+            let st = r.status();
+            let texto = r.text().await.unwrap_or_default();
+            resultado("ollama", model, false, format!("HTTP {st}: {}", recortar(&texto)))
+        }
+        Err(e) => resultado("ollama", model, false, format!("sin respuesta: {e}")),
+    }
+}
+
+/// `instance_id` de un modelo cargado, tal como lo publica LM Studio.
+///
+/// `GET /api/v1/models` devuelve `loaded_instances[].id` y ese es exactamente el
+/// campo que exige `POST /api/v1/models/unload`. Verificado contra la instalación
+/// de esta máquina (32 modelos, uno cargado).
+fn instancia_cargada(v: &serde_json::Value, modelo: &str) -> Option<String> {
+    let lista = v.get("models").and_then(|m| m.as_array())?;
+    for m in lista {
+        let clave = m.get("key").and_then(|k| k.as_str()).unwrap_or("");
+        let id = m.get("id").and_then(|k| k.as_str()).unwrap_or("");
+        if clave != modelo && id != modelo {
+            continue;
+        }
+        let instancias = m.get("loaded_instances").and_then(|i| i.as_array())?;
+        return instancias
+            .first()
+            .and_then(|i| i.get("id"))
+            .and_then(|i| i.as_str())
+            .map(|s| s.to_string());
+    }
+    None
+}
+
+/// Último recurso: el CLI oficial de LM Studio (`lms unload <modelo>`), que
+/// resuelve el identificador por su cuenta si la API no lo encuentra.
+fn lms_unload(model: &str) -> Result<String, String> {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map_err(|_| "sin USERPROFILE".to_string())?;
+    let exe = std::path::PathBuf::from(home)
+        .join(".lmstudio")
+        .join("bin")
+        .join(if cfg!(windows) { "lms.exe" } else { "lms" });
+    if !exe.exists() {
+        return Err("el CLI lms no está instalado".into());
+    }
+    let mut cmd = Command::new(&exe);
+    cmd.args(["unload", model]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let salida = cmd.output().map_err(|e| e.to_string())?;
+    if salida.status.success() {
+        Ok("descargado con el CLI oficial lms".into())
+    } else {
+        Err(recortar(&String::from_utf8_lossy(&salida.stderr)))
+    }
+}
+
+async fn unload_lmstudio(model: &str) -> UnloadResult {
+    for puerto in [1234u16, 1235] {
+        let base = format!("http://127.0.0.1:{puerto}");
+        let Ok(r) = client(6).get(format!("{base}/api/v1/models")).send().await else {
+            continue;
+        };
+        if !r.status().is_success() {
+            continue;
+        }
+        let Ok(v) = r.json::<serde_json::Value>().await else {
+            continue;
+        };
+        let Some(instancia) = instancia_cargada(&v, model) else {
+            continue;
+        };
+        let body = serde_json::json!({ "instance_id": instancia });
+        return match client(30)
+            .post(format!("{base}/api/v1/models/unload"))
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => resultado(
+                "lmstudio",
+                model,
+                true,
+                format!("descargado del puerto {puerto} (instancia {instancia})"),
+            ),
+            Ok(resp) => {
+                let st = resp.status();
+                let texto = resp.text().await.unwrap_or_default();
+                resultado(
+                    "lmstudio",
+                    model,
+                    false,
+                    format!("HTTP {st}: {}", recortar(&texto)),
+                )
+            }
+            Err(e) => resultado("lmstudio", model, false, format!("sin respuesta: {e}")),
+        };
+    }
+    match lms_unload(model) {
+        Ok(mensaje) => resultado("lmstudio", model, true, mensaje),
+        Err(e) => resultado(
+            "lmstudio",
+            model,
+            false,
+            format!("la API no tiene esa instancia cargada y el CLI falló: {e}"),
+        ),
+    }
+}
+
+/// ComfyUI libera con `POST /free`. Definido en su `server.py`: las claves
+/// `unload_models` y `free_memory` se pasan a la cola como banderas, así que la
+/// descarga la ejecuta el worker y puede tardar unos segundos.
+async fn unload_comfyui(forzar: bool) -> UnloadResult {
+    // Si no se puede comprobar la cola, se falla del lado seguro: no se libera a ciegas.
+    match comfyui_generando().await {
+        Some(0) => {}
+        Some(n) if !forzar => {
+            return resultado(
+                "comfyui",
+                "modelo residente",
+                false,
+                format!(
+                    "ComfyUI tiene {n} trabajo(s) en marcha: liberar la VRAM los interrumpe. \
+                     Confirma la interrupción para seguir."
+                ),
+            );
+        }
+        None if !forzar => {
+            return resultado(
+                "comfyui",
+                "modelo residente",
+                false,
+                "no se pudo comprobar si ComfyUI está generando (su /queue no respondió a \
+                 tiempo): no se libera a ciegas; confirma la interrupción para forzar."
+                    .to_string(),
+            );
+        }
+        _ => {}
+    }
+    let body = serde_json::json!({ "unload_models": true, "free_memory": true });
+    match client(30)
+        .post("http://127.0.0.1:8188/free")
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => resultado(
+            "comfyui",
+            "modelo residente",
+            true,
+            "descarga pedida a ComfyUI (la ejecuta su worker; puede tardar unos segundos)",
+        ),
+        Ok(r) => {
+            let st = r.status();
+            let texto = r.text().await.unwrap_or_default();
+            resultado("comfyui", "modelo residente", false, format!("HTTP {st}: {}", recortar(&texto)))
+        }
+        Err(e) => resultado("comfyui", "modelo residente", false, format!("sin respuesta: {e}")),
+    }
+}
+
+/// ¿ComfyUI tiene trabajo en marcha? Devuelve ejecuciones + pendientes.
+pub async fn comfyui_generando() -> Option<usize> {
+    // Tiempo holgado: mientras genera, ComfyUI tarda en contestar y un falso «0»
+    // dejaría liberar la VRAM en mitad de una generación.
+    let v: serde_json::Value = client(8)
+        .get("http://127.0.0.1:8188/queue")
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    let corriendo = v["queue_running"].as_array().map(|a| a.len()).unwrap_or(0);
+    let esperando = v["queue_pending"].as_array().map(|a| a.len()).unwrap_or(0);
+    Some(corriendo + esperando)
+}
+
+/// Saca un modelo concreto de la memoria del motor indicado.
+///
+/// `forzar` solo afecta a ComfyUI: su API libera todo y corta la generación activa,
+/// así que sin permiso explícito se niega a tocarla mientras haya trabajo en marcha.
+pub async fn unload(engine: &str, model: &str, forzar: bool) -> UnloadResult {
+    match engine {
+        "ollama" => unload_ollama(model).await,
+        "lmstudio" => unload_lmstudio(model).await,
+        "comfyui" => unload_comfyui(forzar).await,
+        otro => resultado(
+            otro,
+            model,
+            false,
+            "motor desconocido: KUKIA no conoce un mecanismo de descarga para él",
+        ),
+    }
+}
+
+/// Vacía la VRAM de todos los motores que tengan algo cargado.
+pub async fn unload_all(forzar: bool) -> Vec<UnloadResult> {
+    let engines = vec![
+        ollama_state().await,
+        lmstudio_state().await,
+        comfyui_state().await,
+    ];
+    let mut out = Vec::new();
+    for e in engines {
+        if !e.online || e.models.is_empty() {
+            continue;
+        }
+        if e.engine == "comfyui" {
+            out.push(unload_comfyui(forzar).await);
+            continue;
+        }
+        for m in &e.models {
+            out.push(unload(&e.engine, &m.name, forzar).await);
+        }
+    }
+    out
+}
+
+/* ============ Descarga selectiva por lotes + verificación ============ */
+
+/// Un modelo concreto de un motor concreto, elegido a mano.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Seleccion {
+    pub engine: String,
+    pub model: String,
+    /// Permiso explícito para interrumpir una generación de ComfyUI.
+    #[serde(default)]
+    pub forzar: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoCheck {
+    pub engine: String,
+    pub model: String,
+    /// `None` = este motor no publica una forma fiable de comprobarlo.
+    pub presente: Option<bool>,
+    pub nota: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LoteResult {
+    pub resultados: Vec<UnloadResult>,
+    pub gpus_antes: Vec<GpuVram>,
+    pub gpus_despues: Vec<GpuVram>,
+    /// VRAM medida que se ha recuperado (suma de todas las GPU, solo si bajó).
+    pub liberado_mb: u64,
+    /// Modelos que se pidieron descargar y siguen residiendo.
+    pub siguen_cargados: Vec<String>,
+    pub en_disco: Vec<DiscoCheck>,
+    pub avisos: Vec<String>,
+}
+
+/// ¿Sigue el modelo instalado en el motor? (No se borra nada: solo se consulta.)
+pub async fn sigue_en_disco(engine: &str, model: &str) -> Option<bool> {
+    match engine {
+        "ollama" => {
+            let r = client(4)
+                .get("http://127.0.0.1:11434/api/tags")
+                .send()
+                .await
+                .ok()?;
+            if !r.status().is_success() {
+                return None;
+            }
+            let v: serde_json::Value = r.json().await.ok()?;
+            let nombres: Vec<&str> = v["models"]
+                .as_array()?
+                .iter()
+                .filter_map(|m| m["name"].as_str())
+                .collect();
+            Some(nombres.iter().any(|n| *n == model || n.split(':').next() == Some(model)))
+        }
+        "lmstudio" => {
+            for port in [1234u16, 1235] {
+                let base = format!("http://127.0.0.1:{port}");
+                let Ok(r) = client(4).get(format!("{base}/api/v1/models")).send().await else {
+                    continue;
+                };
+                if !r.status().is_success() {
+                    continue;
+                }
+                let Ok(v) = r.json::<serde_json::Value>().await else {
+                    continue;
+                };
+                let claves: Vec<&str> = v["models"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|m| m["key"].as_str()).collect())
+                    .unwrap_or_default();
+                return Some(claves.contains(&model));
+            }
+            None
+        }
+        // ComfyUI no expone un catálogo fiable de “modelo residente” por nombre.
+        _ => None,
+    }
+}
+
+/// Descarga una selección de modelos, midiendo VRAM antes y después de cada lote y
+/// verificando que los archivos siguen en disco. No borra ni cierra nada.
+pub async fn descargar_lote(items: Vec<Seleccion>) -> LoteResult {
+    let antes = gpus_vram();
+    let mut resultados = Vec::new();
+    let mut avisos: Vec<String> = Vec::new();
+    let mut comfy_avisado = false;
+
+    for it in &items {
+        if it.engine == "comfyui" && !comfy_avisado {
+            avisos.push(
+                "ComfyUI no permite descargar un modelo suelto: su API /free libera TODOS los modelos cargados y la memoria libre. Es lo que se hace al pedirlo."
+                    .into(),
+            );
+            comfy_avisado = true;
+        }
+        resultados.push(unload(&it.engine, &it.model, it.forzar).await);
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    }
+
+    let despues = gpus_vram();
+    let usado_antes: u64 = antes.iter().map(|g| g.used_mb).sum();
+    let usado_despues: u64 = despues.iter().map(|g| g.used_mb).sum();
+    let liberado_mb = usado_antes.saturating_sub(usado_despues);
+
+    // ¿Se quedó algo de lo pedido en memoria?
+    let estados = vec![
+        ollama_state().await,
+        lmstudio_state().await,
+        comfyui_state().await,
+    ];
+    let mut cargados: Vec<String> = Vec::new();
+    for e in &estados {
+        for m in &e.models {
+            cargados.push(format!("{}::{}", e.engine, m.name));
+        }
+    }
+    let mut siguen_cargados: Vec<String> = Vec::new();
+    for it in &items {
+        let clave = format!("{}::{}", it.engine, it.model);
+        if cargados.iter().any(|c| *c == clave) && !siguen_cargados.contains(&clave) {
+            siguen_cargados.push(clave);
+        }
+    }
+    if items.iter().any(|i| i.engine == "comfyui") {
+        // En ComfyUI el nombre del modelo residente no coincide con el que se pidió.
+        if let Some(e) = estados.iter().find(|e| e.engine == "comfyui") {
+            for m in &e.models {
+                let clave = format!("comfyui::{}", m.name);
+                if !siguen_cargados.contains(&clave) {
+                    siguen_cargados.push(clave);
+                }
+            }
+        }
+    }
+
+    let mut en_disco = Vec::new();
+    for it in &items {
+        let presente = sigue_en_disco(&it.engine, &it.model).await;
+        let nota = match (it.engine.as_str(), presente) {
+            (_, Some(true)) => "sigue instalado: se puede volver a cargar cuando quieras".to_string(),
+            (_, Some(false)) => "el motor no lo lista entre sus modelos instalados".to_string(),
+            ("comfyui", _) => "ComfyUI no publica un listado fiable por nombre".to_string(),
+            _ => "no se pudo comprobar (motor sin respuesta)".to_string(),
+        };
+        en_disco.push(DiscoCheck {
+            engine: it.engine.clone(),
+            model: it.model.clone(),
+            presente,
+            nota,
+        });
+    }
+
+    if liberado_mb == 0 && !resultados.is_empty() {
+        avisos.push(
+            "No se ha medido VRAM recuperada: el motor puede haberla soltado sin cambiar el contador de nvidia-smi, o Windows y otros procesos siguen ocupándola."
+                .into(),
+        );
+    }
+
+    LoteResult {
+        resultados,
+        gpus_antes: antes,
+        gpus_despues: despues,
+        liberado_mb,
+        siguen_cargados,
+        en_disco,
+        avisos,
+    }
+}
+
+/* ============================ Historial ============================ */
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OpVram {
+    pub id: i64,
+    pub engine: String,
+    pub model: String,
+    pub ok: bool,
+    pub liberado_mb: u64,
+    pub nota: String,
+    pub created_at: String,
+}
+
+pub fn historial_add(
+    db: &crate::memory::Database,
+    engine: &str,
+    model: &str,
+    ok: bool,
+    liberado_mb: u64,
+    nota: &str,
+) -> Result<(), String> {
+    db.conn()
+        .execute(
+            "INSERT INTO vram_ops(engine, model, ok, liberado_mb, nota, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![engine, model, ok as i64, liberado_mb as i64, nota, now()],
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+pub fn historial(db: &crate::memory::Database, limit: usize) -> Vec<OpVram> {
+    let Ok(mut st) = db.conn().prepare(
+        "SELECT id, engine, model, ok, liberado_mb, nota, created_at FROM vram_ops \
+         ORDER BY id DESC LIMIT ?1",
+    ) else {
+        return Vec::new();
+    };
+    let filas = st.query_map(rusqlite::params![limit as i64], |r| {
+        Ok(OpVram {
+            id: r.get(0)?,
+            engine: r.get(1)?,
+            model: r.get(2)?,
+            ok: r.get::<_, i64>(3)? > 0,
+            liberado_mb: r.get::<_, i64>(4)? as u64,
+            nota: r.get(5)?,
+            created_at: r.get(6)?,
+        })
+    });
+    match filas {
+        Ok(it) => it.filter_map(|r| r.ok()).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/* ============ Gestor de liberación: medido, por motor y por GPU ============ */
+
+/// Estado de una GPU con lo que la operación recuperó en ella.
+#[derive(Debug, Clone, Serialize)]
+pub struct GpuUsed {
+    pub index: u32,
+    pub name: String,
+    pub used_mb: u64,
+    pub total_mb: u64,
+    /// MB recuperados en esta GPU durante la operación (0 si no cambió).
+    pub freed_mb: u64,
+}
+
+/// Resultado de una liberación con medición antes/después.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReleaseReport {
+    /// `"ollama"`, `"gpu1"` o `"ambas"`.
+    pub target: String,
+    /// Cierto si no hubo ningún fallo (también si no había nada que descargar).
+    pub ok: bool,
+    pub freed_mb: u64,
+    pub gpus: Vec<GpuUsed>,
+    pub results: Vec<UnloadResult>,
+    pub note: String,
+    pub checked_at: String,
+}
+
+fn usada_por_gpu() -> Vec<(u32, String, u64, u64)> {
+    gpus_vram()
+        .into_iter()
+        .map(|g| (g.index, g.name, g.used_mb, g.total_mb))
+        .collect()
+}
+
+/// Diferencia de VRAM usada entre dos lecturas, GPU a GPU.
+///
+/// `saturating_sub`: si la memoria **sube** (otro proceso carga algo a la vez)
+/// se informa 0 recuperado en vez de un número negativo que no significa nada.
+fn comparar(antes: &[(u32, String, u64, u64)], despues: &[(u32, String, u64, u64)]) -> Vec<GpuUsed> {
+    despues
+        .iter()
+        .map(|(idx, name, used, total)| {
+            let previa = antes.iter().find(|(i, _, _, _)| i == idx).map(|(_, _, u, _)| *u);
+            GpuUsed {
+                index: *idx,
+                name: name.clone(),
+                used_mb: *used,
+                total_mb: *total,
+                freed_mb: previa.map(|p| p.saturating_sub(*used)).unwrap_or(0),
+            }
+        })
+        .collect()
+}
+
+/// Diferencia medida, pero solo si la operación llegó a pedir algo al motor.
+///
+/// Si todos los resultados son negativos (por ejemplo ComfyUI negándose porque está
+/// generando) no se le apunta a KUKIA una memoria que soltó otro proceso: la cifra
+/// se queda en 0 aunque nvidia-smi marque menos que antes.
+fn comparar_si_se_actuo(
+    antes: &[(u32, String, u64, u64)],
+    hubo_orden: bool,
+) -> Vec<GpuUsed> {
+    let mut gpus = comparar(antes, &usada_por_gpu());
+    if !hubo_orden {
+        for g in &mut gpus {
+            g.freed_mb = 0;
+        }
+    }
+    gpus
+}
+
+fn total_recuperado(gpus: &[GpuUsed]) -> u64 {
+    gpus.iter().map(|g| g.freed_mb).sum()
+}
+
+/// Los motores tardan en soltar la memoria: se les da un respiro antes de medir.
+async fn esperar_liberacion() {
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+}
+
+/// Descarga **todos** los modelos de un motor concreto, por su mecanismo oficial.
+pub async fn release_engine(engine: &str, forzar: bool) -> ReleaseReport {
+    let antes = usada_por_gpu();
+    let mut results: Vec<UnloadResult> = Vec::new();
+    #[allow(unused_assignments)]
+    let mut note = String::new();
+    let mut ok = true;
+
+    match engine {
+        "ollama" | "lmstudio" => {
+            let e = if engine == "ollama" {
+                ollama_state().await
+            } else {
+                lmstudio_state().await
+            };
+            if !e.online {
+                ok = false;
+                note = format!("{} no responde: {}", engine, e.note);
+            } else if e.models.is_empty() {
+                note = format!("{} no tiene modelos cargados", engine);
+            } else {
+                for m in &e.models {
+                    results.push(unload(engine, &m.name, forzar).await);
+                }
+                note = format!("{} modelo(s) descargado(s) de {}", results.len(), engine);
+            }
+        }
+        "comfyui" => {
+            let r = unload_comfyui(forzar).await;
+            ok = r.ok;
+            note = if r.ok {
+                "descarga pedida a ComfyUI; su worker la ejecuta y se mide el resultado".into()
+            } else {
+                r.message.clone()
+            };
+            results.push(r);
+        }
+        "wan2gp" | "maestro" => {
+            ok = false;
+            note = format!(
+                "{engine} no ofrece API para descargar modelos: solo libera su VRAM al cerrar el \
+                 proceso, y KUKIA no cierra procesos de Windows"
+            );
+            results.push(resultado(engine, "modelo residente", false, note.clone()));
+        }
+        otro => {
+            ok = false;
+            note = format!(
+                "motor desconocido ({otro}): KUKIA no conoce un mecanismo de descarga para él"
+            );
+        }
+    }
+
+    if !results.is_empty() {
+        ok = ok && results.iter().all(|r| r.ok);
+    }
+    if results.iter().any(|r| r.ok) {
+        esperar_liberacion().await;
+    }
+
+    let hubo_orden = results.iter().any(|r| r.ok);
+    let gpus = comparar_si_se_actuo(&antes, hubo_orden);
+    ReleaseReport {
+        target: engine.to_string(),
+        ok,
+        freed_mb: total_recuperado(&gpus),
+        gpus,
+        results,
+        note,
+        checked_at: now(),
+    }
+}
+
+/// Libera la VRAM de una GPU.
+///
+/// **Límite real medido (01/11/2026):** ningún motor local permite descargar solo la
+/// parte de un modelo que vive en una GPU. Ollama repartió `qwen3-vl:4b` entre las dos
+/// (11.528 + 9.661 MB) y su API solo sabe descargar el modelo entero. Por eso esta
+/// operación descarga los modelos completos y **mide después cuánto se recuperó en
+/// cada GPU**, en vez de fingir una selectividad que no existe.
+pub async fn release_gpu(gpu: u32, forzar: bool) -> ReleaseReport {
+    let antes = usada_por_gpu();
+    if !antes.iter().any(|(i, _, _, _)| *i == gpu) {
+        return ReleaseReport {
+            target: format!("gpu{gpu}"),
+            ok: false,
+            freed_mb: 0,
+            gpus: Vec::new(),
+            results: Vec::new(),
+            note: format!("la GPU {gpu} no existe en esta máquina"),
+            checked_at: now(),
+        };
+    }
+
+    let results = unload_all(forzar).await;
+    if !results.is_empty() {
+        esperar_liberacion().await;
+    }
+    let hubo_orden = results.iter().any(|r| r.ok);
+    let gpus = comparar_si_se_actuo(&antes, hubo_orden);
+    let propio = gpus.iter().find(|g| g.index == gpu).map(|g| g.freed_mb).unwrap_or(0);
+    let note = if results.is_empty() {
+        "no había modelos cargados que descargar".to_string()
+    } else {
+        format!(
+            "ningún motor local descarga solo la parte de una GPU: se descargaron {} modelo(s) \
+             enteros y en GPU{gpu} se recuperaron {:.2} GB (el total de ambas puede ser mayor si \
+             algún modelo estaba repartido)",
+            results.iter().filter(|r| r.ok).count(),
+            propio as f64 / 1024.0
+        )
+    };
+
+    ReleaseReport {
+        target: format!("gpu{gpu}"),
+        ok: results.iter().all(|r| r.ok),
+        freed_mb: total_recuperado(&gpus),
+        gpus,
+        results,
+        note,
+        checked_at: now(),
+    }
+}
+
+/// Libera las dos GPU (todos los motores), midiendo el resultado.
+pub async fn release_everything(forzar: bool) -> ReleaseReport {
+    let antes = usada_por_gpu();
+    let results = unload_all(forzar).await;
+    if !results.is_empty() {
+        esperar_liberacion().await;
+    }
+    let hubo_orden = results.iter().any(|r| r.ok);
+    let gpus = comparar_si_se_actuo(&antes, hubo_orden);
+    let note = if results.is_empty() {
+        "no había modelos cargados que descargar".to_string()
+    } else {
+        format!("{} modelo(s) descargado(s)", results.iter().filter(|r| r.ok).count())
+    };
+    ReleaseReport {
+        target: "ambas".into(),
+        ok: results.iter().all(|r| r.ok),
+        freed_mb: total_recuperado(&gpus),
+        gpus,
+        results,
+        note,
+        checked_at: now(),
+    }
+}
+
+/// MB que se podrían recuperar si se descargara todo lo cargado ahora mismo.
+///
+/// Es una estimación: en LM Studio la API no publica la VRAM del modelo cargado, así
+/// que se usa su tamaño de archivo como suelo, y en ComfyUI se usa lo que declara torch.
+pub fn recuperable_mb(engines: &[EngineState]) -> u64 {
+    engines
+        .iter()
+        .map(|e| {
+            e.models
+                .iter()
+                .map(|m| {
+                    if m.vram_mb > 0 {
+                        m.vram_mb
+                    } else {
+                        (m.size_gb * 1024.0) as u64
+                    }
+                })
+                .sum::<u64>()
+        })
+        .sum()
 }
 
 #[cfg(test)]
@@ -522,6 +1328,111 @@ mod tests {
             );
         }
         println!("competencia: {} · {}", r.competition, r.warning);
+    }
+
+    #[test]
+    fn lee_el_instance_id_de_lm_studio() {
+        // Forma real de `GET /api/v1/models` en esta máquina.
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"models":[
+                {"key":"flint-40b-abliterated","id":"flint-40b-abliterated",
+                 "loaded_instances":[{"id":"flint-40b-abliterated","config":{}}]},
+                {"key":"otro","id":"otro","loaded_instances":[]}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            instancia_cargada(&v, "flint-40b-abliterated"),
+            Some("flint-40b-abliterated".to_string())
+        );
+        assert_eq!(instancia_cargada(&v, "otro"), None, "sin instancias no se descarga");
+        assert_eq!(instancia_cargada(&v, "no-existe"), None);
+    }
+
+    #[test]
+    fn un_motor_desconocido_no_finge_exito() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let r = rt.block_on(unload("vllm", "lo-que-sea", false));
+        assert!(!r.ok, "no se puede decir que se descargó lo que no se sabe descargar");
+        assert_eq!(r.engine, "vllm");
+        assert!(r.message.contains("desconocido"));
+    }
+
+    #[test]
+    fn la_diferencia_mide_lo_recuperado_por_gpu() {
+        let antes = vec![(0u32, "RTX 5070".to_string(), 11528u64, 12282u64), (1, "RTX 5060 Ti".into(), 9661, 16311)];
+        let despues = vec![(0u32, "RTX 5070".to_string(), 2376u64, 12282u64), (1, "RTX 5060 Ti".into(), 212, 16311)];
+        let g = comparar(&antes, &despues);
+        assert_eq!(g[0].freed_mb, 9152);
+        assert_eq!(g[1].freed_mb, 9449);
+        assert_eq!(total_recuperado(&g), 18601, "fue lo medido de verdad al descargar qwen3-vl:4b");
+    }
+
+    #[test]
+    fn si_la_memoria_sube_no_se_informa_negativo() {
+        let antes = vec![(1u32, "RTX 5060 Ti".to_string(), 200u64, 16311u64)];
+        let despues = vec![(1u32, "RTX 5060 Ti".to_string(), 5000u64, 16311u64)];
+        let g = comparar(&antes, &despues);
+        assert_eq!(g[0].freed_mb, 0, "otro proceso puede cargar mientras se mide");
+    }
+
+    #[test]
+    fn una_gpu_que_no_existe_no_finge_exito() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let r = rt.block_on(release_gpu(9, false));
+        assert!(!r.ok);
+        assert_eq!(r.freed_mb, 0);
+        assert!(r.note.contains("no existe"));
+    }
+
+    #[test]
+    fn wan2gp_y_maestro_se_declaran_sin_api_de_descarga() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let r = rt.block_on(release_engine("wan2gp", false));
+        assert!(!r.ok, "no se puede afirmar que se descargó algo que no se puede descargar");
+        assert!(r.note.contains("no ofrece API"));
+        assert_eq!(r.results.len(), 1);
+        assert!(!r.results[0].ok);
+    }
+
+    #[test]
+    fn el_recuperable_suma_modelos_y_usa_el_tamano_si_falta_la_vram() {
+        let engines = vec![
+            motor("ollama", 2),  // 2 × 1024 MB
+            EngineState {
+                engine: "lmstudio".into(),
+                online: true,
+                note: String::new(),
+                models: vec![EngineModel { name: "m".into(), vram_mb: 0, size_gb: 2.0 }],
+                vram_total_mb: 0,
+            },
+        ];
+        assert_eq!(recuperable_mb(&engines), 4096);
+    }
+
+    #[test]
+    fn el_historial_registra_y_devuelve_lo_ultimo() {
+        let p = std::env::temp_dir().join(format!("kukia_vram_hist_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = crate::memory::Database::open(&p).expect("db de prueba");
+        historial_add(&db, "ollama", "flint:latest", true, 0, "descargado de VRAM").unwrap();
+        historial_add(&db, "lote", "2 modelos", true, 4096, "VRAM medida").unwrap();
+        let h = historial(&db, 10);
+        assert_eq!(h.len(), 2);
+        assert_eq!(h[0].engine, "lote");
+        assert_eq!(h[0].liberado_mb, 4096);
+        assert!(h[1].ok);
+        drop(db);
+        let _ = std::fs::remove_file(p);
     }
 
     #[test]

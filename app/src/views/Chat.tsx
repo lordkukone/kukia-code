@@ -17,6 +17,10 @@ export default function Chat({ provider, model, notify }: Props) {
   const [streamText, setStreamText] = useState("");
   const [thinking, setThinking] = useState("");
   const [agentId, setAgentId] = useState("kukia-master");
+  // Herramientas: los modelos que declaran «tools» pueden usar las de KUKIA.
+  const [usarTools, setUsarTools] = useState(true);
+  // Acciones: escribir, reemplazar, ejecutar y web (además de la política del agente).
+  const [aprobarAcciones, setAprobarAcciones] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const loadSessions = async () => {
@@ -80,12 +84,16 @@ export default function Chat({ provider, model, notify }: Props) {
 
       let acc = "";
       let thinkAcc = "";
+      let toolAcc = "";
       await chatStream(
         {
           provider,
           model,
           messages: [...history, { role: "user", content: text }],
           system_prompt: agent?.system_prompt,
+          agent: agentId,
+          tools: usarTools,
+          aprobar: aprobarAcciones,
         },
         (tok) => {
           acc += tok;
@@ -116,6 +124,10 @@ export default function Chat({ provider, model, notify }: Props) {
         (think) => {
           thinkAcc += think;
           setThinking(thinkAcc);
+        },
+        (nombre, detalle) => {
+          toolAcc += `\n🔧 ${nombre}: ${detalle}`;
+          setThinking(thinkAcc + toolAcc);
         },
       );
     } catch (e) {
@@ -160,6 +172,28 @@ export default function Chat({ provider, model, notify }: Props) {
           <span className="chip subtle">
             {provider} · {model || "sin modelo"}
           </span>
+          <label
+            className="inline"
+            title="Los modelos que declaran «tools» pueden leer, buscar en archivos, consultar la memoria y la GPU"
+          >
+            <input
+              type="checkbox"
+              checked={usarTools}
+              onChange={(e) => setUsarTools(e.target.checked)}
+            />
+            Herramientas
+          </label>
+          <label
+            className="inline"
+            title="Permite además escribir, reemplazar, ejecutar y consultar la web (solo si el agente lo autoriza en Seguridad)"
+          >
+            <input
+              type="checkbox"
+              checked={aprobarAcciones}
+              onChange={(e) => setAprobarAcciones(e.target.checked)}
+            />
+            Acciones
+          </label>
         </div>
 
         <div className="messages">

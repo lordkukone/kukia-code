@@ -1,0 +1,194 @@
+{
+ "1": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "WanVideo\\2_2\\wan_animate_2_distill_int8_convrot.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "2": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "lora_name": "WAN\\animate\\lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
+   "strength_model": 1.0,
+   "model": [
+    "1",
+    0
+   ]
+  }
+ },
+ "3": {
+  "class_type": "ModelSamplingSD3",
+  "inputs": {
+   "model": [
+    "2",
+    0
+   ],
+   "shift": 5.0
+  }
+ },
+ "4": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+   "type": "wan"
+  }
+ },
+ "5": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "Wan2_1_VAE_bf16.safetensors"
+  }
+ },
+ "6": {
+  "class_type": "CLIPVisionLoader",
+  "inputs": {
+   "clip_name": "clip_vision_h.safetensors"
+  }
+ },
+ "7": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "the same character, photorealistic live action, real skin texture, natural lighting, cinematic film, detailed background",
+   "clip": [
+    "4",
+    0
+   ]
+  }
+ },
+ "8": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "anime, cartoon, drawing, illustration, cel shading, static, frozen, blurry, distorted, extra fingers, bad anatomy, low quality",
+   "clip": [
+    "4",
+    0
+   ]
+  }
+ },
+ "9": {
+  "class_type": "VHS_LoadVideo",
+  "inputs": {
+   "video": "animate2_guide.mp4",
+   "force_rate": 0,
+   "custom_width": 0,
+   "custom_height": 0,
+   "frame_load_cap": 33,
+   "skip_first_frames": 0,
+   "select_every_nth": 1,
+   "format": "AnimateDiff"
+  }
+ },
+ "10": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "animate2_ref.jpeg"
+  }
+ },
+ "11": {
+  "class_type": "CLIPVisionEncode",
+  "inputs": {
+   "crop": "none",
+   "clip_vision": [
+    "6",
+    0
+   ],
+   "image": [
+    "10",
+    0
+   ]
+  }
+ },
+ "12": {
+  "class_type": "WanAnimate2ToVideo",
+  "inputs": {
+   "width": 480,
+   "height": 832,
+   "length": 33,
+   "batch_size": 1,
+   "video_frame_offset": 0,
+   "pose_strength": 1.0,
+   "pose_start_percent": 0.0,
+   "pose_end_percent": 1.0,
+   "reference_image_strength": 1.0,
+   "positive": [
+    "7",
+    0
+   ],
+   "negative": [
+    "8",
+    0
+   ],
+   "vae": [
+    "5",
+    0
+   ],
+   "reference_image": [
+    "10",
+    0
+   ],
+   "pose_video": [
+    "9",
+    0
+   ],
+   "clip_vision_output": [
+    "11",
+    0
+   ]
+  }
+ },
+ "13": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": 12345,
+   "steps": 6,
+   "cfg": 1.0,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 1.0,
+   "model": [
+    "3",
+    0
+   ],
+   "positive": [
+    "12",
+    0
+   ],
+   "negative": [
+    "12",
+    1
+   ],
+   "latent_image": [
+    "12",
+    2
+   ]
+  }
+ },
+ "14": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "13",
+    0
+   ],
+   "vae": [
+    "5",
+    0
+   ]
+  }
+ },
+ "15": {
+  "class_type": "SaveAnimatedWEBP",
+  "inputs": {
+   "filename_prefix": "kukia_wan_animate",
+   "fps": 16.0,
+   "lossless": false,
+   "quality": 90,
+   "method": "default",
+   "images": [
+    "14",
+    0
+   ]
+  }
+ }
+}

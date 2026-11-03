@@ -45,7 +45,9 @@
         "muestreo": "7",
         "escalado": "3"
       },
-      "requiere": ["Realistic_Vision_V6.0_B1.safetensors"],
+      "requiere": [
+        "Realistic_Vision_V6.0_B1.safetensors"
+      ],
       "nota": "Reinterpreta más: sale muy realista pero puede cambiar género y facciones. Baja el denoise a 0,42 si quieres conservar más la estructura."
     },
     {
@@ -65,7 +67,9 @@
         "muestreo": "7",
         "escalado": "3"
       },
-      "requiere": ["animagineXL40_v4Opt.safetensors"],
+      "requiere": [
+        "animagineXL40_v4Opt.safetensors"
+      ],
       "nota": "Conserva identidad y parecido muy bien: mismo personaje, mismo traje, misma pose, estética anime limpia."
     },
     {
@@ -79,7 +83,10 @@
       "segundos_estimados": 0,
       "estado": "pendiente_conversion",
       "nodos": {},
-      "requiere": ["vace_ditto_14B.json (WanGP)", "LoRA Ditto 0,23 GB"],
+      "requiere": [
+        "vace_ditto_14B.json (WanGP)",
+        "LoRA Ditto 0,23 GB"
+      ],
       "nota": "El grafo existe en ComfyUI/WanGP pero no está convertido a formato API: no se ofrece hasta probarlo."
     },
     {
@@ -87,14 +94,45 @@
       "titulo": "Vídeo anime → vídeo real (LTX 2.3 Anime2Real)",
       "direccion": "anime2real",
       "tipo": "video",
-      "motor": "ComfyUI · LTX 2.3 22B + LoRA IC",
-      "archivo": "LTX23_Anime2Real.json",
-      "verificado": "",
-      "segundos_estimados": 0,
-      "estado": "pendiente_conversion",
+      "motor": "ComfyUI · LTX 2.3 22B fp8 + LoRA IC anime2real",
+      "archivo": "anime2real_ltx_api.json",
+      "verificado": "MEDIDO 2026-11-01 21:38 · 905,6 s · 448x768 · 49 frames",
+      "segundos_estimados": 906,
+      "estado": "listo",
       "nodos": {},
-      "requiere": ["LTX 2.3 22B", "LoRA IC anime→real"],
-      "nota": "Usa subgrafos: hay que aplanarlo antes de poder encolarlo por API."
+      "requiere": [
+        "ltx-2.3-22b-dev-fp8.safetensors",
+        "ltx-2.3-22b-distilled-lora-384.safetensors",
+        "ltx23_anime2real_rank64_v1_4500.safetensors",
+        "comfy_gemma_3_12B_it.safetensors"
+      ],
+      "nota": "Clip medido en la 5060 Ti: pico 15.995 MiB de VRAM y 57,7 GB de RAM usada. Con estos ajustes (9 sigmas, cfg 1) el estilo NO se rompe del todo: el frame 16 sigue en anime."
+    },
+    {
+      "id": "wan_animate_video_api",
+      "titulo": "Wan Animate 2 · transferencia de movimiento a acción real",
+      "direccion": "anime2real",
+      "tipo": "video",
+      "motor": "ComfyUI · Wan 2.2 Animate 2 distilled int8 + lightx2v",
+      "archivo": "wan_animate_api.json",
+      "verificado": "MEDIDO 2026-11-01 21:58 · 503,6 s · 480x832 · 37 frames",
+      "nodos": {
+        "imagen": "10",
+        "positivo": "7",
+        "negativo": "8",
+        "muestreo": "13",
+        "escalado": "12"
+      },
+      "requiere": [
+        "wan_animate_2_distill_int8_convrot.safetensors",
+        "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
+        "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "Wan2_1_VAE_bf16.safetensors",
+        "clip_vision_h.safetensors"
+      ],
+      "segundos_estimados": 504,
+      "nota": "Clip medido: pico 13.924 MiB de VRAM y 44,3 GB de RAM usada. Sí convierte a acción real (frame 16 fotorrealista), pero toma la cara de la imagen de referencia.",
+      "estado": "listo"
     }
   ]
 }

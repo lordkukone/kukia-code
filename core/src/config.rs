@@ -8,6 +8,11 @@ pub struct CloudProviderCfg {
     pub id: String,
     pub label: String,
     pub base_url: String,
+    /// `true` si el endpoint exige la cabecera `x-opencode-session` en cada
+    /// petición. Lo pide **OpenCode Go** (`https://opencode.ai/zen/go/v1`): sin
+    /// ella responde `400 MissingSessionID`. Comprobado contra el servicio real.
+    #[serde(default)]
+    pub session_header: bool,
 }
 
 pub fn default_cloud_providers() -> Vec<CloudProviderCfg> {
@@ -16,21 +21,33 @@ pub fn default_cloud_providers() -> Vec<CloudProviderCfg> {
             id: "opencode".into(),
             label: "OpenCode Zen".into(),
             base_url: "https://opencode.ai/zen/v1".into(),
+            session_header: false,
+        },
+        // Plan de suscripción: endpoint propio, no el de Zen. Los modelos Go
+        // (`deepseek-v4.1-flash`, `glm-5.3`, `gpt-6-luna`…) solo existen aquí.
+        CloudProviderCfg {
+            id: "opencode-go".into(),
+            label: "OpenCode Go".into(),
+            base_url: "https://opencode.ai/zen/go/v1".into(),
+            session_header: true,
         },
         CloudProviderCfg {
             id: "freebuff".into(),
             label: "Freebuff".into(),
             base_url: "https://freebuff.com/api/v1/paid".into(),
+            session_header: false,
         },
         CloudProviderCfg {
             id: "openai".into(),
             label: "OpenAI".into(),
             base_url: "https://api.openai.com/v1".into(),
+            session_header: false,
         },
         CloudProviderCfg {
             id: "custom".into(),
             label: "Personalizado".into(),
             base_url: String::new(),
+            session_header: false,
         },
     ]
 }
@@ -209,6 +226,7 @@ impl AppConfig {
                     id: c.id.clone(),
                     label: c.label.clone(),
                     base_url: self.cloud_base_url.clone(),
+                    session_header: c.session_header,
                 };
             }
             if !c.base_url.trim().is_empty() {
@@ -219,6 +237,21 @@ impl AppConfig {
             id,
             label: "Cloud".into(),
             base_url: self.cloud_base_url.clone(),
+            session_header: false,
+        }
+    }
+
+    /// Añade al catálogo guardado los proveedores que trae esta versión y aún no
+    /// estaban (una config antigua no recibe los nuevos si no se fusiona).
+    pub fn merge_cloud_defaults(&mut self) {
+        for d in default_cloud_providers() {
+            if !self
+                .cloud_providers
+                .iter()
+                .any(|c| c.id.eq_ignore_ascii_case(&d.id))
+            {
+                self.cloud_providers.push(d);
+            }
         }
     }
 
@@ -262,6 +295,7 @@ pub fn load_config() -> AppConfig {
         Ok(raw) => serde_json::from_str::<AppConfig>(&raw).unwrap_or_default(),
         Err(_) => AppConfig::default(),
     };
+    cfg.merge_cloud_defaults();
     cfg.refresh_flags();
     cfg
 }
@@ -308,9 +342,34 @@ mod tests {
     fn el_catalogo_cloud_trae_los_proveedores_conocidos() {
         let c = AppConfig::default();
         let ids: Vec<&str> = c.cloud_providers.iter().map(|p| p.id.as_str()).collect();
-        for esperado in ["opencode", "freebuff", "openai", "custom"] {
+        for esperado in ["opencode", "opencode-go", "freebuff", "openai", "custom"] {
             assert!(ids.contains(&esperado), "falta {esperado} en el catálogo");
         }
+    }
+
+    #[test]
+    fn opencode_go_tiene_su_endpoint_y_pide_cabecera_de_sesion() {
+        let c = AppConfig::default();
+        let go = c
+            .cloud_providers
+            .iter()
+            .find(|p| p.id == "opencode-go")
+            .expect("falta opencode-go");
+        assert_eq!(go.base_url, "https://opencode.ai/zen/go/v1");
+        assert!(go.session_header, "Go exige x-opencode-session");
+        let zen = c.cloud_providers.iter().find(|p| p.id == "opencode").unwrap();
+        assert!(!zen.session_header, "Zen no usa cabecera de sesión");
+    }
+
+    #[test]
+    fn una_config_vieja_recibe_los_proveedores_nuevos() {
+        let mut c = AppConfig::default();
+        c.cloud_providers.retain(|p| p.id != "opencode-go");
+        c.merge_cloud_defaults();
+        assert!(c.cloud_providers.iter().any(|p| p.id == "opencode-go"));
+        // No duplica lo que ya estaba.
+        let n = c.cloud_providers.iter().filter(|p| p.id == "opencode").count();
+        assert_eq!(n, 1);
     }
 
     #[test]

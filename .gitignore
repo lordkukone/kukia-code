@@ -31,3 +31,19 @@ desktop.ini
 
 # Informes privados
 INFORMES/*.local.md
+
+# Evidencias y capturas pesadas (no son proyecto)
+INFORMES/evidencia/
+INFORMES/capturas_vistas/
+INFORMES/*.json
+
+# Binarios generados
+installer/*.exe
+*.exe
+*.msi
+
+# Auditorias temporales y scripts sueltos de automatizacion
+.tmp_audit/
+*.bak
+*.orig
+

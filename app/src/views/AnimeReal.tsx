@@ -31,29 +31,38 @@ export default function AnimeReal({ notify }: { notify: (m: string) => void }) {
 
   const [trabajando, setTrabajando] = useState(false);
   const [resultado, setResultado] = useState<AnimeResult | null>(null);
+  const [capsCargando, setCapsCargando] = useState(true);
 
   const cargar = async () => {
+    // 1) El estado de ComfyUI va aparte y primero: si el análisis de modelos tarda o
+    // falla, la vista no debe quedarse en blanco ni anunciar que ComfyUI está caído.
     try {
-      const [s, c, imgs, h, dir] = await Promise.all([
-        api.animeStatus(),
-        api.animeCapabilities(),
-        api.animeInputs(),
-        api.animeHistory(30),
-        api.animeOutputPath(),
-      ]);
-      setEstado(s);
-      setCaps(c);
-      setImagenes(imgs);
-      setHistorial(h);
-      setSalida(dir);
-      if (imgs.length > 0 && !imagen) setImagen(imgs[0]);
-      const primera = c.find((x) => x.direccion === direccion && x.disponible);
-      if (primera && !plantilla) {
-        setPlantilla(primera.id);
-        setDenoise(primera.id.includes("id_") ? 0.55 : 0.55);
-      }
+      setEstado(await api.animeStatus());
     } catch (e) {
-      notify(`Error cargando el estudio: ${e}`);
+      notify(`Error consultando ComfyUI: ${e}`);
+    }
+
+    // 2) Llamadas independientes: una que falle no borra las demás.
+    setCapsCargando(true);
+    const [c, imgs, h, dir] = await Promise.all([
+      api.animeCapabilities().catch((e) => {
+        notify(`No se pudieron analizar los modelos: ${e}`);
+        return [] as AnimeCapability[];
+      }),
+      api.animeInputs().catch(() => [] as string[]),
+      api.animeHistory(30).catch(() => [] as AnimeJob[]),
+      api.animeOutputPath().catch(() => ""),
+    ]);
+    setCaps(c);
+    setImagenes(imgs);
+    setHistorial(h);
+    setSalida(dir);
+    setCapsCargando(false);
+    if (imgs.length > 0 && !imagen) setImagen(imgs[0]);
+    const primera = c.find((x) => x.direccion === direccion && x.disponible);
+    if (primera && !plantilla) {
+      setPlantilla(primera.id);
+      setDenoise(primera.id.includes("id_") ? 0.55 : 0.55);
     }
   };
 
@@ -104,10 +113,12 @@ export default function AnimeReal({ notify }: { notify: (m: string) => void }) {
     <div className="page">
       <div className="page-head">
         <h1>KUKIA ANIME ↔ REAL STUDIO</h1>
-        <span className={`chip ${estado?.online ? "ok" : "warn"}`}>
+        <span className={`chip ${estado?.online ? "ok" : estado ? "warn" : "subtle"}`}>
           {estado?.online
             ? `ComfyUI ${estado.version} · ${estado.device.split(":")[1]?.trim() ?? estado.device}`
-            : "ComfyUI sin conexión"}
+            : estado
+              ? "ComfyUI sin conexión"
+              : "Comprobando ComfyUI…"}
         </span>
       </div>
 
@@ -121,9 +132,12 @@ export default function AnimeReal({ notify }: { notify: (m: string) => void }) {
                   {Math.round(estado.vram_free_mb / 1024)} / {Math.round(estado.vram_total_mb / 1024)} GB
                 </strong>{" "}
                 · cola {estado.en_cola} · resultados en <span className="mono">{salida}</span>
+                {capsCargando && <> · analizando modelos…</>}
               </>
+            ) : estado ? (
+              <>Arranca ComfyUI en el puerto 8188 y vuelve a cargar. {estado.nota}</>
             ) : (
-              <>Arranca ComfyUI en el puerto 8188 y vuelve a cargar. {estado?.nota}</>
+              <>Consultando ComfyUI en el puerto 8188…</>
             )}
           </div>
           <button className="btn ghost" onClick={cargar} disabled={ocupado}>

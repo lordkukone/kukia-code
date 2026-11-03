@@ -144,7 +144,11 @@ fn proveedor_ollama_lista_y_responde() {
         temperature: Some(0.0),
         max_tokens: Some(16),
         system_prompt: None,
-    };
+    
+        tools: false,
+        aprobar: false,
+        agent: None,
+};
 
     let t0 = std::time::Instant::now();
     let res = rt.block_on(providers::chat(&req, &cfg)).expect("chat real");
@@ -204,7 +208,11 @@ fn proveedor_lmstudio_chat_real() {
         temperature: Some(0.0),
         max_tokens: Some(16),
         system_prompt: None,
-    };
+    
+        tools: false,
+        aprobar: false,
+        agent: None,
+};
     let t0 = std::time::Instant::now();
     let res = rt.block_on(providers::chat(&req, &cfg)).expect("chat real LM Studio");
     let ms = t0.elapsed().as_millis();

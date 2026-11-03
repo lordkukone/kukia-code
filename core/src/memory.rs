@@ -223,6 +223,14 @@ pub struct Database {
 }
 
 impl Database {
+    /// Acceso de solo lectura a la conexión, para los módulos que necesitan
+    /// trabajar con sus propias tablas (cola de trabajos, por ejemplo).
+    pub fn conn(&self) -> &Connection {
+        &self.conn
+    }
+}
+
+impl Database {
     pub fn open(path: &Path) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -315,6 +323,51 @@ impl Database {
                     level TEXT NOT NULL,
                     message TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    payload TEXT NOT NULL DEFAULT '{}',
+                    state TEXT NOT NULL DEFAULT 'queued',
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 2,
+                    worker TEXT,
+                    progress REAL,
+                    result TEXT,
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    finished_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state);
+                CREATE TABLE IF NOT EXISTS model_bindings (
+                    scope TEXT PRIMARY KEY,
+                    engine TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS vram_ops (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    engine TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    ok INTEGER NOT NULL,
+                    liberado_mb INTEGER NOT NULL DEFAULT 0,
+                    nota TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS mcp_grants (
+                    server TEXT PRIMARY KEY,
+                    granted INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS mcp_tools (
+                    server TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    schema TEXT NOT NULL DEFAULT '{}',
+                    discovered_at TEXT NOT NULL,
+                    PRIMARY KEY (server, name)
                 );
                 CREATE TABLE IF NOT EXISTS research_runs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

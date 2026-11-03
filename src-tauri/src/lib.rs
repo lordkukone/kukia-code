@@ -1,10 +1,12 @@
 use kukia_core::{
-    agents, config, gaming, gpu, logs,
+    agents, bridge, catalog, config, control, ecosystem, engines, gaming, gpu, hub, jobs, lab, logs,
+    mcp, registry, serve, tools, xoxete,
     memory::{AgentPolicy, AuditRow, Database, GamingAlertRow, GamingItem, Project},
     permissions, providers, radar, research, security, vram,
 };
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::ipc::Channel;
 use tauri::{Emitter, State};
@@ -23,6 +25,10 @@ struct AppState {
     db: Arc<Mutex<Database>>,
     config: Mutex<config::AppConfig>,
     running: Arc<Mutex<HashMap<String, RunningCmd>>>,
+    /// Parada global de la cola: si está activa, no se reclaman trabajos nuevos.
+    halt_jobs: Arc<AtomicBool>,
+    /// Cuántos workers están permitidos (1..=jobs::MAX_WORKERS).
+    job_slots: Arc<AtomicUsize>,
 }
 
 /// Candado a prueba de veneno: si un hilo entró en pánico con el mutex tomado,
@@ -157,6 +163,9 @@ async fn chat_stream(
     on_event: Channel<providers::ChatEvent>,
 ) -> Result<(), String> {
     let cfg = guard(&state.config).clone();
+    // La base se pasa al chat para ejecutar herramientas y dejar auditoría; el
+    // candado se toma por consulta, así que no bloquea al resto de la interfaz.
+    let db = state.db.clone();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<providers::ChatEvent>();
     let ch = on_event.clone();
     let forwarder = tauri::async_runtime::spawn(async move {
@@ -164,7 +173,7 @@ async fn chat_stream(
             let _ = ch.send(ev);
         }
     });
-    let res = providers::chat_stream(&request, &cfg, tx).await;
+    let res = providers::chat_stream_con(&request, &cfg, Some(&db), tx).await;
     let _ = forwarder.await;
     if let Err(e) = &res {
         logs::append("error", &format!("stream falló: {e}"));
@@ -891,6 +900,10 @@ async fn benchmark_run(
         temperature: Some(0.2),
         max_tokens: Some(256),
         system_prompt: None,
+        // Un benchmark mide el modelo, no ejecuta herramientas.
+        tools: false,
+        aprobar: false,
+        agent: None,
     };
     let resp = providers::chat(&req, &cfg).await?;
     guard(&state.db).benchmark_add(
@@ -1180,6 +1193,1261 @@ fn vram_fits(size_gb: f64, gpu: u32) -> Option<(bool, String)> {
     vram::fits(size_gb, gpu)
 }
 
+/// Expulsa un modelo concreto de la memoria del motor (botón de la vista VRAM).
+#[tauri::command]
+async fn vram_unload(engine: String, model: String, forzar: Option<bool>) -> vram::UnloadResult {
+    let r = vram::unload(&engine, &model, forzar.unwrap_or(false)).await;
+    logs::append(
+        if r.ok { "info" } else { "warn" },
+        &format!("vram unload {}/{}: {}", r.engine, r.model, r.message),
+    );
+    r
+}
+
+/* ------------- CENTRO DE CONTROL DE MOTORES (CC1–CC4) ------------- */
+
+/// CC1: estado real de Ollama y LM Studio (versión, puerto, modelos, latencia).
+#[tauri::command]
+async fn engines_status() -> Vec<engines::EngineStatus> {
+    engines::status_all().await
+}
+
+/// CC2: fichas de todos los modelos de un motor.
+#[tauri::command]
+async fn engine_cards(engine: String) -> Result<Vec<engines::ModelCard>, String> {
+    engines::cards(&engine).await
+}
+
+/// CC2: ficha completa de un modelo concreto.
+#[tauri::command]
+async fn engine_card(engine: String, model: String) -> Result<engines::ModelCard, String> {
+    engines::card(&engine, &model).await
+}
+
+/// CC3: parámetros guardados de un modelo.
+#[tauri::command]
+fn engine_params_get(engine: String, model: String) -> engines::InferenceParams {
+    engines::params_get(&engine, &model)
+}
+
+/// CC3: guarda los parámetros y devuelve lo que el motor no soporta.
+#[tauri::command]
+fn engine_params_set(
+    engine: String,
+    model: String,
+    params: engines::InferenceParams,
+) -> Vec<String> {
+    let avisos = engines::params_set(&engine, &model, params.clone());
+    logs::append(
+        "info",
+        &format!(
+            "parametros {}/{} guardados ({} aviso[s] de incompatibilidad)",
+            engine,
+            model,
+            avisos.len()
+        ),
+    );
+    avisos
+}
+
+/// CC4: estima el consumo antes de cargar (no toca la VRAM).
+#[tauri::command]
+async fn engine_preflight(engine: String, model: String) -> engines::Preflight {
+    let p = engines::params_get(&engine, &model);
+    engines::preflight(&engine, &model, &p).await
+}
+
+/// CC4: carga el modelo solo si el preflight lo autoriza.
+#[tauri::command]
+async fn engine_load(engine: String, model: String) -> vram::UnloadResult {
+    let p = engines::params_get(&engine, &model);
+    let pre = engines::preflight(&engine, &model, &p).await;
+    if !pre.fits {
+        logs::append(
+            "warn",
+            &format!("carga rechazada {}/{}: {}", engine, model, pre.detail),
+        );
+        return vram::UnloadResult {
+            engine,
+            model,
+            ok: false,
+            message: format!("El preflight no autoriza la carga. {}", pre.detail),
+        };
+    }
+    let r = engines::load(&engine, &model, p).await;
+    logs::append(
+        if r.ok { "info" } else { "warn" },
+        &format!("carga {}/{}: {}", r.engine, r.model, r.message),
+    );
+    r
+}
+
+/// Vacía la VRAM de todos los motores con modelos cargados.
+/// Descarga una selección concreta de modelos (posiblemente de varios motores),
+/// midiendo VRAM antes/después y verificando que siguen en disco.
+#[tauri::command]
+async fn vram_unload_seleccion(
+    state: State<'_, AppState>,
+    items: Vec<vram::Seleccion>,
+) -> Result<vram::LoteResult, String> {
+    if items.is_empty() {
+        return Err("no has seleccionado ningún modelo".into());
+    }
+    let r = vram::descargar_lote(items.clone()).await;
+    {
+        let db = guard(&state.db);
+        for it in &items {
+            let res = r
+                .resultados
+                .iter()
+                .find(|x| x.engine == it.engine && x.model == it.model);
+            let (ok, nota) = match res {
+                Some(x) => (x.ok, x.message.clone()),
+                None => (false, "sin resultado del motor".to_string()),
+            };
+            let _ = vram::historial_add(&db, &it.engine, &it.model, ok, 0, &nota);
+        }
+        if r.liberado_mb > 0 {
+            let _ = vram::historial_add(
+                &db,
+                "lote",
+                &format!("{} modelo(s)", items.len()),
+                true,
+                r.liberado_mb,
+                "VRAM medida recuperada",
+            );
+        }
+    }
+    logs::append(
+        "info",
+        &format!(
+            "vram: {} modelo(s) descargados · {} MB recuperados · siguen cargados: {}",
+            r.resultados.len(),
+            r.liberado_mb,
+            if r.siguen_cargados.is_empty() {
+                "ninguno".to_string()
+            } else {
+                r.siguen_cargados.join(", ")
+            }
+        ),
+    );
+    Ok(r)
+}
+
+#[tauri::command]
+fn vram_historial(state: State<'_, AppState>, limit: Option<usize>) -> Vec<vram::OpVram> {
+    let db = guard(&state.db);
+    vram::historial(&db, limit.unwrap_or(30))
+}
+
+#[tauri::command]
+async fn vram_unload_all(forzar: Option<bool>) -> Vec<vram::UnloadResult> {
+    let res = vram::unload_all(forzar.unwrap_or(false)).await;
+    let ok = res.iter().filter(|r| r.ok).count();
+    logs::append(
+        "info",
+        &format!("vram unload all: {} de {} descargados", ok, res.len()),
+    );
+    for r in &res {
+        if !r.ok {
+            logs::append(
+                "warn",
+                &format!("vram unload {}/{}: {}", r.engine, r.model, r.message),
+            );
+        }
+    }
+    res
+}
+
+/// Descarga todos los modelos de un motor, midiendo la VRAM antes y después.
+#[tauri::command]
+async fn vram_release_engine(engine: String, forzar: Option<bool>) -> vram::ReleaseReport {
+    let r = vram::release_engine(&engine, forzar.unwrap_or(false)).await;
+    logs::append(
+        if r.ok { "info" } else { "warn" },
+        &format!(
+            "vram liberar motor {}: {} MB recuperados · {}",
+            engine, r.freed_mb, r.note
+        ),
+    );
+    r
+}
+
+/// Libera la VRAM de una GPU, midiendo lo recuperado en cada una.
+#[tauri::command]
+async fn vram_release_gpu(gpu: u32, forzar: Option<bool>) -> vram::ReleaseReport {
+    let r = vram::release_gpu(gpu, forzar.unwrap_or(false)).await;
+    logs::append(
+        if r.ok { "info" } else { "warn" },
+        &format!("vram liberar GPU{}: {} MB recuperados · {}", gpu, r.freed_mb, r.note),
+    );
+    r
+}
+
+/// Libera la VRAM de las dos GPU (todos los motores), midiendo el resultado.
+#[tauri::command]
+async fn vram_release_everything(forzar: Option<bool>) -> vram::ReleaseReport {
+    let r = vram::release_everything(forzar.unwrap_or(false)).await;
+    logs::append(
+        if r.ok { "info" } else { "warn" },
+        &format!("vram liberar ambas GPU: {} MB recuperados · {}", r.freed_mb, r.note),
+    );
+    r
+}
+
+/* ---------- Panel avanzado de modelo (contexto, KV, GPU, perfiles) ---------- */
+
+/// Contexto, tabla de KV, parámetros con su estado y uso de GPU de un modelo.
+#[tauri::command]
+async fn control_capacidades(engine: String, model: String) -> control::Capacidades {
+    control::capacidades(&engine, &model).await
+}
+
+/// Medidores en tiempo real (VRAM por GPU, RAM, CPU y modelos cargados).
+#[tauri::command]
+async fn control_metricas() -> control::Metricas {
+    control::metricas().await
+}
+
+#[tauri::command]
+fn perfiles_listar() -> Vec<control::Perfil> {
+    control::perfiles_listar()
+}
+
+#[tauri::command]
+fn perfil_guardar(perfil: control::Perfil) -> Result<Vec<control::Perfil>, String> {
+    let r = control::perfil_guardar(perfil);
+    if let Ok(lista) = &r {
+        logs::append("info", &format!("perfil guardado ({} perfiles)", lista.len()));
+    }
+    r
+}
+
+#[tauri::command]
+fn perfil_borrar(nombre: String) -> Result<Vec<control::Perfil>, String> {
+    let r = control::perfil_borrar(&nombre);
+    if r.is_ok() {
+        logs::append("info", &format!("perfil borrado: {nombre}"));
+    }
+    r
+}
+
+/// Aplica un perfil guardando antes los parámetros que había (deshacible).
+#[tauri::command]
+fn perfil_aplicar(
+    engine: String,
+    model: String,
+    nombre: String,
+) -> Result<(engines::InferenceParams, Vec<String>), String> {
+    let r = control::perfil_aplicar(&engine, &model, &nombre);
+    if let Ok((_, avisos)) = &r {
+        logs::append(
+            "info",
+            &format!(
+                "perfil {nombre} aplicado a {engine}/{model} ({} aviso[s])",
+                avisos.len()
+            ),
+        );
+    }
+    r
+}
+
+/// Devuelve los parámetros que había antes de aplicar el último perfil.
+#[tauri::command]
+fn perfil_restaurar_anterior(
+    engine: String,
+    model: String,
+) -> Option<engines::InferenceParams> {
+    let r = control::perfil_restaurar_anterior(&engine, &model);
+    if r.is_some() {
+        logs::append("info", &format!("parametros anteriores restaurados en {engine}/{model}"));
+    }
+    r
+}
+
+/* ---------------- COLA DE TRABAJOS (SQ1) ---------------- */
+
+/// Bucle de un worker: reclama, ejecuta y anota el resultado.
+///
+/// Los workers **no cargan modelos**: miden el que esté cargado, liberan lo que el
+/// usuario pidió liberar o escanean fuentes públicas. Así nunca expulsan el modelo
+/// que estés usando para meter otro por detrás.
+async fn worker_loop(
+    idx: usize,
+    db: Arc<Mutex<Database>>,
+    stop: Arc<AtomicBool>,
+    activos: Arc<AtomicUsize>,
+) {
+    let nombre = format!("worker-{}", idx + 1);
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            continue;
+        }
+        if idx >= activos.load(Ordering::Relaxed).max(1) {
+            tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+            continue;
+        }
+
+        let reclamado = {
+            let g = guard(&db);
+            jobs::claim_next(&g, &nombre)
+        };
+        let Some(job) = reclamado else {
+            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            continue;
+        };
+
+        let inicio = std::time::Instant::now();
+        let salida = match tokio::time::timeout(
+            std::time::Duration::from_secs(1800),
+            ejecutar_job(&job, &db, &stop),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => Err("superó el límite de 30 minutos y se dio por fallido".to_string()),
+        };
+
+        let g = guard(&db);
+        match salida {
+            Ok(v) => {
+                let _ = jobs::finish(&g, job.id, v);
+                logs::append(
+                    "info",
+                    &format!(
+                        "cola: {} #{} terminado en {} ms ({})",
+                        job.kind,
+                        job.id,
+                        inicio.elapsed().as_millis(),
+                        nombre
+                    ),
+                );
+            }
+            Err(e) => {
+                let reintento = jobs::fail(&g, job.id, &e).unwrap_or(false);
+                logs::append(
+                    "warn",
+                    &format!(
+                        "cola: {} #{} falló: {}{}",
+                        job.kind,
+                        job.id,
+                        e,
+                        if reintento { " (vuelve a la cola)" } else { "" }
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// Ejecuta un trabajo según su tipo. Devuelve el resultado que se guarda en la fila.
+async fn ejecutar_job(
+    job: &jobs::Job,
+    db: &Arc<Mutex<Database>>,
+    stop: &Arc<AtomicBool>,
+) -> Result<serde_json::Value, String> {
+    let payload = &job.payload;
+    match job.kind.as_str() {
+        "noop" => {
+            let ms = payload["ms"].as_u64().unwrap_or(200).min(10_000);
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            Ok(serde_json::json!({ "esperado_ms": ms, "nota": "trabajo de prueba" }))
+        }
+
+        "bench" => {
+            let engine = payload["engine"].as_str().unwrap_or("ollama").to_string();
+            let model = payload["model"]
+                .as_str()
+                .ok_or("falta el modelo en el trabajo de medición")?
+                .to_string();
+            let tokens = payload["tokens"].as_u64().unwrap_or(128).clamp(16, 2048);
+            let prompt = payload["prompt"]
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| lab::PROMPT_PRUEBA.to_string());
+            let params: engines::InferenceParams = payload
+                .get("params")
+                .cloned()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
+
+            if stop.load(Ordering::Relaxed) {
+                return Err("parada global activa antes de empezar".into());
+            }
+            let r = lab::benchmark(&engine, &model, &params, &prompt, tokens).await;
+            let _ = lab::guardar_resultados(std::slice::from_ref(&r));
+            if !r.ok {
+                return Err(format!("la medición falló: {}", r.error));
+            }
+            Ok(serde_json::json!({
+                "tok_s": r.tok_s,
+                "prefill_tok_s": r.prefill_tok_s,
+                "ttft_ms": r.ttft_ms,
+                "tokens": r.tokens,
+                "vram_pico": r.vram_pico,
+                "ram_pico_gb": r.ram_pico_gb,
+                "config": r.params_texto,
+            }))
+        }
+
+        "vram_release" => {
+            let modo = payload["target"].as_str().unwrap_or("all");
+            let forzar = payload["forzar"].as_bool().unwrap_or(false);
+            let informe = match modo {
+                "engine" => {
+                    let motor = payload["engine"]
+                        .as_str()
+                        .ok_or("falta el motor que se quiere liberar")?;
+                    vram::release_engine(motor, forzar).await
+                }
+                "gpu" => {
+                    let gpu = payload["gpu"].as_u64().unwrap_or(1) as u32;
+                    vram::release_gpu(gpu, forzar).await
+                }
+                "all" => vram::release_everything(forzar).await,
+                otro => return Err(format!("no sé liberar «{otro}»: usa engine, gpu o all")),
+            };
+            Ok(serde_json::json!({
+                "target": informe.target,
+                "freed_mb": informe.freed_mb,
+                "ok": informe.ok,
+                "note": informe.note,
+                "gpus": informe.gpus,
+            }))
+        }
+
+        "model_pull" => {
+            let modelo = payload["model"]
+                .as_str()
+                .ok_or("falta el modelo que se quiere descargar")?
+                .to_string();
+            if stop.load(Ordering::Relaxed) {
+                return Err("parada global activa antes de descargar".into());
+            }
+            hub::pull_ollama(db, job.id, &modelo).await
+        }
+
+        "research_auto" => {
+            let objetivo = payload["objetivo"]
+                .as_str()
+                .ok_or("falta el objetivo de investigación")?
+                .to_string();
+            let limite = payload["limite"].as_u64().unwrap_or(10) as usize;
+            research::validar_objetivo(&objetivo)?;
+            let items = research::scan_all().await;
+            if stop.load(Ordering::Relaxed) {
+                return Err("parada global activa antes de guardar el informe".into());
+            }
+            let g = guard(db);
+            let r = research::autonomous_con(&g, &objetivo, limite, items)?;
+            Ok(serde_json::json!({
+                "objetivo": r.objetivo,
+                "relevantes": r.relevantes.len(),
+                "nuevos": r.nuevos,
+                "propuestas": r.propuestas.len(),
+                "ruta": r.ruta,
+            }))
+        }
+
+        "research_scan" => {
+            let fuente = payload["source"].as_str().unwrap_or("all");
+            let items = research::scan_one(fuente).await;
+            let mut nuevos = 0usize;
+            {
+                let g = guard(db);
+                for d in &items {
+                    if g.research_upsert(d).unwrap_or(false) {
+                        nuevos += 1;
+                    }
+                }
+                for a in research::alerts_for(&items) {
+                    let _ = g.research_alert_add(&a.item_id, &a.level, &a.message);
+                }
+                let _ = g.research_run_add(fuente, items.len(), nuevos);
+            }
+            Ok(serde_json::json!({
+                "fuente": fuente,
+                "encontrados": items.len(),
+                "nuevos": nuevos,
+                "titulos": items.iter().take(5).map(|d| d.title.clone()).collect::<Vec<_>>(),
+            }))
+        }
+
+        otro => Err(format!("tipo de trabajo no implementado: {otro}")),
+    }
+}
+
+/// Encola un trabajo. La interfaz usa esto para todo lo que puede tardar.
+#[tauri::command]
+fn jobs_enqueue(
+    state: State<'_, AppState>,
+    kind: String,
+    payload: Option<serde_json::Value>,
+    priority: Option<i64>,
+) -> Result<i64, String> {
+    let db = guard(&state.db);
+    let id = jobs::enqueue(
+        &db,
+        &kind,
+        payload.unwrap_or(serde_json::json!({})),
+        priority.unwrap_or(0),
+    )?;
+    logs::append("info", &format!("cola: encolado {kind} #{id}"));
+    Ok(id)
+}
+
+#[tauri::command]
+fn jobs_list(state: State<'_, AppState>, limit: Option<i64>) -> Vec<jobs::Job> {
+    let db = guard(&state.db);
+    jobs::list(&db, limit.unwrap_or(100))
+}
+
+#[tauri::command]
+fn jobs_stats(state: State<'_, AppState>) -> jobs::JobStats {
+    let db = guard(&state.db);
+    jobs::stats(&db)
+}
+
+#[tauri::command]
+fn jobs_cancel(state: State<'_, AppState>, id: i64) -> Result<bool, String> {
+    let db = guard(&state.db);
+    jobs::cancel(&db, id)
+}
+
+#[tauri::command]
+fn jobs_cancel_all(state: State<'_, AppState>) -> Result<usize, String> {
+    let db = guard(&state.db);
+    let n = jobs::cancel_all_queued(&db)?;
+    logs::append("warn", &format!("cola: {n} trabajo(s) pendientes cancelados"));
+    Ok(n)
+}
+
+#[tauri::command]
+fn jobs_clear(state: State<'_, AppState>) -> Result<usize, String> {
+    let db = guard(&state.db);
+    jobs::clear_finished(&db)
+}
+
+/// Parada global: no se reclaman trabajos nuevos; el que esté en curso termina.
+#[tauri::command]
+fn jobs_stop(state: State<'_, AppState>) -> bool {
+    state.halt_jobs.store(true, Ordering::Relaxed);
+    logs::append("warn", "cola: PARADA GLOBAL activada");
+    state.halt_jobs.load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+fn jobs_resume(state: State<'_, AppState>) -> bool {
+    state.halt_jobs.store(false, Ordering::Relaxed);
+    logs::append("info", "cola: reanudada");
+    !state.halt_jobs.load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+fn jobs_estado(state: State<'_, AppState>) -> serde_json::Value {
+    serde_json::json!({
+        "parada": state.halt_jobs.load(Ordering::Relaxed),
+        "activos": state.job_slots.load(Ordering::Relaxed),
+        "max": jobs::MAX_WORKERS,
+    })
+}
+
+#[tauri::command]
+fn jobs_workers(state: State<'_, AppState>, workers: Option<usize>) -> usize {
+    if let Some(n) = workers {
+        let acotado = n.clamp(1, jobs::MAX_WORKERS);
+        state.job_slots.store(acotado, Ordering::Relaxed);
+        logs::append("info", &format!("cola: {acotado} worker(s) activos"));
+    }
+    state.job_slots.load(Ordering::Relaxed)
+}
+
+/* ---------------- CEREBRO UNIVERSAL DE MODELOS ---------------- */
+
+/// Catálogo real: lo que cada motor enumera por su API. Lo que no enumera, se
+/// declara como «sin API de catálogo» en vez de inventarse.
+#[tauri::command]
+async fn catalog_list(state: State<'_, AppState>) -> Result<catalog::CatalogReport, String> {
+    let cfg = guard(&state.config).clone();
+    let r = catalog::collect(&cfg).await;
+    logs::append(
+        "info",
+        &format!(
+            "catálogo universal: {} modelo(s) de {} motor(es) en {} ms",
+            r.total,
+            r.coverage.iter().filter(|c| c.reachable).count(),
+            r.generated_ms
+        ),
+    );
+    Ok(r)
+}
+
+/// Qué sabe hacer de verdad cada adaptador.
+#[tauri::command]
+fn catalog_adapters() -> Vec<catalog::AdapterInfo> {
+    catalog::adapters()
+}
+
+/// Enrutado para una herramienta: capacidad, contexto mínimo y cloud autorizado o no.
+#[tauri::command]
+async fn catalog_route(
+    state: State<'_, AppState>,
+    need: catalog::Need,
+) -> Result<catalog::Route, String> {
+    let cfg = guard(&state.config).clone();
+    let report = catalog::collect(&cfg).await;
+    let db = guard(&state.db);
+    let r = catalog::resolver_en(&report.models, &db, &need);
+    drop(db);
+    logs::append(
+        "info",
+        &format!(
+            "router «{}»: {}",
+            need.capability,
+            r.chosen
+                .as_ref()
+                .map(|c| format!("{} ({:.0} pts)", c.key, c.score))
+                .unwrap_or_else(|| "sin candidato".into())
+        ),
+    );
+    Ok(r)
+}
+
+/// Fija el modelo de una herramienta o agente (se respeta en el enrutado).
+#[tauri::command]
+fn catalog_bind_set(
+    state: State<'_, AppState>,
+    scope: String,
+    engine: String,
+    model: String,
+) -> Result<(), String> {
+    let db = guard(&state.db);
+    catalog::bind_set(&db, &scope, &engine, &model)?;
+    drop(db);
+    logs::append(
+        "info",
+        &format!("catálogo: «{scope}» fijado a {engine}::{model}"),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+fn catalog_binds(state: State<'_, AppState>) -> Vec<catalog::Binding> {
+    let db = guard(&state.db);
+    catalog::binds(&db)
+}
+
+#[tauri::command]
+fn catalog_bind_clear(state: State<'_, AppState>, scope: String) -> Result<bool, String> {
+    let db = guard(&state.db);
+    catalog::bind_clear(&db, &scope)
+}
+
+/// Ruta completa: elige el modelo y le habla por su adaptador. El cloud solo si
+/// `allow_cloud` viene en true; por defecto no.
+#[tauri::command]
+async fn catalog_chat(
+    state: State<'_, AppState>,
+    prompt: String,
+    capability: Option<String>,
+    model_key: Option<String>,
+    max_tokens: Option<u32>,
+    allow_cloud: Option<bool>,
+) -> Result<catalog::UnifiedChat, String> {
+    let cfg = guard(&state.config).clone();
+    let report = catalog::collect(&cfg).await;
+
+    let (cand, nota) = if let Some(clave) = model_key {
+        let m = report
+            .models
+            .iter()
+            .find(|m| m.key == clave)
+            .ok_or_else(|| format!("«{clave}» no está en el catálogo ahora mismo"))?;
+        if !m.can_chat {
+            return Err(format!("«{clave}» no tiene adaptador de chat"));
+        }
+        (
+            catalog::Candidate {
+                key: m.key.clone(),
+                engine: m.engine.clone(),
+                id: m.id.clone(),
+                kind: m.kind.clone(),
+                score: 100.0,
+                reasons: vec!["elegido a mano".into()],
+            },
+            "elegido a mano: no pasa por el router".to_string(),
+        )
+    } else {
+        let need = catalog::Need {
+            capability: capability.unwrap_or_else(|| "texto".into()),
+            min_context: None,
+            allow_cloud: allow_cloud.unwrap_or(false),
+            prefer_loaded: true,
+            scope: None,
+        };
+        let db = guard(&state.db);
+        let elegido = catalog::elegir_para(&report.models, &db, &need);
+        drop(db);
+        elegido?
+    };
+
+    let mut r = catalog::hablar(&cfg, &cand, &prompt, max_tokens).await?;
+    r.note = nota;
+    logs::append(
+        "info",
+        &format!(
+            "router → {}/{} · {} tok salida · {} ms",
+            r.engine, r.model, r.completion_tokens, r.total_ms
+        ),
+    );
+    Ok(r)
+}
+
+/* ---------------- MODEL HUB ---------------- */
+
+/// Búsqueda en la librería pública de Ollama (HTML de ollama.com).
+#[tauri::command]
+async fn hub_buscar_ollama(q: String) -> Result<Vec<hub::OllamaHit>, String> {
+    let r = hub::buscar_ollama(&q).await?;
+    logs::append("info", &format!("hub: «{q}» → {} en Ollama", r.len()));
+    Ok(r)
+}
+
+/// Búsqueda de GGUF en Hugging Face con su API pública.
+#[tauri::command]
+async fn hub_buscar_hf(q: String, limite: Option<usize>) -> Result<Vec<hub::HubModelo>, String> {
+    let r = hub::buscar_hf(&q, limite.unwrap_or(20)).await?;
+    logs::append("info", &format!("hub: «{q}» → {} en Hugging Face", r.len()));
+    Ok(r)
+}
+
+/// Manifiesto real de un modelo de la librería de Ollama (tamaño y digest).
+#[tauri::command]
+async fn hub_manifest(modelo: String) -> Result<hub::OllamaTag, String> {
+    hub::manifiesto_ollama(&modelo).await
+}
+
+/// GGUF que ya están en los discos de este equipo.
+#[tauri::command]
+fn hub_gguf(max: Option<usize>) -> Vec<hub::GgufLocal> {
+    let raices = hub::raices_gguf();
+    let r = hub::gguf_locales(&raices, max.unwrap_or(400));
+    logs::append("info", &format!("hub: {} GGUF locales", r.len()));
+    r
+}
+
+/// ¿Cabe este modelo aquí? Con la VRAM y la RAM de ahora mismo.
+#[tauri::command]
+fn hub_compat(params_b: f64, quant: String, ctx: Option<u64>) -> hub::Compatibilidad {
+    let (ram, gpus) = hub::hardware_actual();
+    hub::evaluar(params_b, &quant, ctx.unwrap_or(8192), ram, gpus)
+}
+
+/// Encola la descarga de un modelo de Ollama. El progreso real se ve en Tareas.
+#[tauri::command]
+fn hub_pull(state: State<'_, AppState>, modelo: String) -> Result<i64, String> {
+    let db = guard(&state.db);
+    let payload = serde_json::json!({ "model": modelo });
+    let id = jobs::enqueue(&db, "model_pull", payload, 5)?;
+    drop(db);
+    logs::append("info", &format!("hub: descarga de «{modelo}» encolada (#{id})"));
+    Ok(id)
+}
+
+/* ---------------- PUENTE BIDIRECCIONAL KUKIA CORE ↔ OPENCODE ---------------- */
+//
+// Dirección A: KUKIA lee el catálogo real de OpenCode y le pide respuestas por
+// su API (`/api/session` + `/session/{id}/message`).
+// Dirección B: `serve.rs` expone los modelos de KUKIA en `/v1` para que OpenCode
+// los consuma. KUKIA nunca escribe en la configuración de OpenCode.
+
+/// Proceso `opencode serve` que haya arrancado KUKIA (solo se para el nuestro).
+static OPENCODE_HIJO: Mutex<Option<std::process::Child>> = Mutex::new(None);
+
+const PUENTE_URL_POR_DEFECTO: &str = "http://127.0.0.1:4096";
+const KUKIA_PORT_POR_DEFECTO: u16 = 8311;
+
+fn puente_url(v: Option<String>) -> String {
+    v.map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| PUENTE_URL_POR_DEFECTO.to_string())
+}
+
+/// Estado del puente: OpenCode instalado, su catálogo, sus agentes y si su
+/// servidor responde. Todo se lee de la instalación real, sin modificar nada.
+#[tauri::command]
+async fn puente_estado(url: Option<String>) -> bridge::PuenteEstado {
+    let u = puente_url(url);
+    bridge::estado(Some(u)).await
+}
+
+/// Modelos de OpenCode. Con servidor vivo usa `GET /api/model` (más datos);
+/// si no, cae a `opencode models`.
+#[tauri::command]
+async fn puente_modelos(url: Option<String>) -> Vec<bridge::ModeloPuente> {
+    let u = puente_url(url);
+    bridge::modelos(Some(&u)).await
+}
+
+#[tauri::command]
+async fn puente_agentes(url: Option<String>) -> Vec<bridge::AgentePuente> {
+    let u = puente_url(url);
+    bridge::agentes(Some(&u)).await
+}
+
+/// Pide una respuesta a OpenCode. Crea sesión propia para no mezclar contextos.
+#[tauri::command]
+async fn puente_preguntar(
+    url: Option<String>,
+    provider: String,
+    model: String,
+    agent: Option<String>,
+    texto: String,
+    timeout: Option<u64>,
+) -> Result<bridge::PuenteRespuesta, String> {
+    let u = puente_url(url);
+    if texto.trim().is_empty() {
+        return Err("escribe un mensaje".into());
+    }
+    let r = bridge::preguntar(
+        &u,
+        &provider,
+        &model,
+        agent.as_deref(),
+        &texto,
+        timeout.unwrap_or(180),
+    )
+    .await?;
+    logs::append(
+        "info",
+        &format!(
+            "puente: opencode respondió con {} en {} ms (sesión {})",
+            r.modelo, r.ms, r.session_id
+        ),
+    );
+    Ok(r)
+}
+
+/// Arranca `opencode serve` como proceso hijo de KUKIA. Devuelve la URL lista.
+#[tauri::command]
+async fn puente_servidor_arrancar(port: Option<u16>) -> Result<String, String> {
+    {
+        let mut h = guard(&OPENCODE_HIJO);
+        if let Some(c) = h.as_mut() {
+            if matches!(c.try_wait(), Ok(None)) {
+                return Ok(format!(
+                    "Ya estaba arrancado por KUKIA (pid {}).",
+                    c.id()
+                ));
+            }
+        }
+    }
+
+    let bin = bridge::binario();
+    let puerto = port.unwrap_or(4096);
+    let mut cmd = if bin.to_lowercase().ends_with(".cmd") || bin.to_lowercase().ends_with(".bat") {
+        let mut c = std::process::Command::new("cmd");
+        c.arg("/C").arg(&bin);
+        c
+    } else {
+        std::process::Command::new(&bin)
+    };
+    cmd.args(["serve", "--port", &puerto.to_string(), "--hostname", "127.0.0.1"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("no se pudo arrancar «{bin} serve»: {e}"))?;
+    let pid = child.id();
+    *guard(&OPENCODE_HIJO) = Some(child);
+
+    // Espera activa a que conteste, máximo 25 s.
+    let url = format!("http://127.0.0.1:{puerto}");
+    let cliente = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+    for _ in 0..25 {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if let Ok(r) = cliente.get(format!("{url}/api/health")).send().await {
+            if r.status().is_success() {
+                logs::append("info", &format!("puente: opencode serve arriba en {url} (pid {pid})"));
+                return Ok(url);
+            }
+        }
+    }
+    Err(format!(
+        "«opencode serve» arrancó (pid {pid}) pero no respondió en {url} en 25 s."
+    ))
+}
+
+/// Para el servidor de OpenCode **solo si lo arrancó KUKIA**.
+#[tauri::command]
+fn puente_servidor_parar() -> Result<String, String> {
+    let mut h = guard(&OPENCODE_HIJO);
+    match h.as_mut() {
+        None => Ok("KUKIA no ha arrancado ningún servidor de OpenCode.".into()),
+        Some(c) => {
+            let pid = c.id();
+            let _ = c.kill();
+            let _ = c.wait();
+            *h = None;
+            logs::append("info", &format!("puente: servidor de OpenCode parado (pid {pid})"));
+            Ok(format!("Servidor de OpenCode parado (pid {pid})."))
+        }
+    }
+}
+
+/// Servidor local compatible OpenAI con los modelos de KUKIA (para OpenCode).
+#[tauri::command]
+async fn kukia_server_start(
+    state: State<'_, AppState>,
+    port: Option<u16>,
+    token: Option<String>,
+) -> Result<serve::ServeStatus, String> {
+    let cfg = guard(&state.config).clone();
+    let tok = token
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            format!("kukia-{nanos:x}")
+        });
+    let st = serve::start(cfg, port.unwrap_or(KUKIA_PORT_POR_DEFECTO), tok).await?;
+    logs::append(
+        "info",
+        &format!("puente: servidor KUKIA arriba en {} (solo loopback)", st.url),
+    );
+    Ok(st)
+}
+
+#[tauri::command]
+fn kukia_server_status() -> serve::ServeStatus {
+    serve::status()
+}
+
+#[tauri::command]
+fn kukia_server_stop() -> bool {
+    serve::stop();
+    logs::append("info", "puente: servidor KUKIA detenido");
+    true
+}
+
+/// Fragmento JSON para pegar en `opencode.json`. KUKIA no lo escribe solo.
+#[tauri::command]
+async fn puente_snippet(port: Option<u16>, token: Option<String>) -> String {
+    let st = serve::status();
+    let p = port.unwrap_or(if st.port > 0 { st.port } else { KUKIA_PORT_POR_DEFECTO });
+    let tok = token
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or(st.token);
+    let modelos: Vec<String> = serve::modelos_catalogo()
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    bridge::snippet_opencode(&format!("http://127.0.0.1:{p}"), &tok, &modelos)
+}
+
+/* ---------------- ECOSISTEMA IA: KUKIA + OPENCODE + FREEBUFF ---------------- */
+
+/// Los tres nodos con sus capacidades comprobadas. Abre su propia conexión a la
+/// base para no retener candados durante los `await`.
+#[tauri::command]
+async fn ecosistema_estado(
+    state: State<'_, AppState>,
+    opencode_url: Option<String>,
+) -> Result<ecosystem::Ecosistema, String> {
+    let cfg = guard(&state.config).clone();
+    let data = config::data_dir().join("kukia.db");
+    let url = opencode_url.filter(|u| !u.trim().is_empty());
+    Ok(ecosystem::todo(&cfg, &data, url).await)
+}
+
+/// Recomienda el entorno adecuado para una tarea según lo que esté conectado.
+#[tauri::command]
+async fn ecosistema_enrutar(
+    state: State<'_, AppState>,
+    tarea: String,
+    opencode_url: Option<String>,
+) -> Result<ecosystem::Recomendacion, String> {
+    let cfg = guard(&state.config).clone();
+    let data = config::data_dir().join("kukia.db");
+    let url = opencode_url.filter(|u| !u.trim().is_empty());
+    let ec = ecosystem::todo(&cfg, &data, url).await;
+    Ok(ecosystem::enrutar(&tarea, &ec.nodos))
+}
+
+/// Inventario universal: 18 sistemas sondeados en paralelo (proceso, puerto,
+/// HTTP y ruta). No modifica ni arranca nada.
+#[tauri::command]
+async fn ecosistema_universal() -> Result<registry::Inventario, String> {
+    Ok(registry::inventario().await)
+}
+
+/* ---------------- XOXETE: instalación real y memoria propia ---------------- */
+
+/// Estado real de la instalación de Xoxete: config, agente, modelo,
+/// instrucciones, plugins, binarios y motor de memoria. Solo lectura.
+#[tauri::command]
+async fn xoxete_estado() -> Result<xoxete::XoxeteEstado, String> {
+    tauri::async_runtime::spawn_blocking(xoxete::estado)
+        .await
+        .map_err(|e| format!("tarea cancelada: {e}"))
+}
+
+/// Busca recuerdos en la base original de Xoxete (motor oficial, solo lectura).
+#[tauri::command]
+async fn xoxete_memorias(
+    consulta: String,
+    limite: Option<usize>,
+) -> Result<Vec<xoxete::Memoria>, String> {
+    let tope = limite.unwrap_or(10);
+    tauri::async_runtime::spawn_blocking(move || xoxete::buscar(&consulta, tope))
+        .await
+        .map_err(|e| format!("tarea cancelada: {e}"))?
+}
+
+/// Guarda una experiencia en la misma base que usa Xoxete. Acción explícita:
+/// la interfaz solo la lanza cuando el usuario lo pide.
+#[tauri::command]
+async fn xoxete_recordar(
+    tipo: String,
+    contexto: String,
+    accion: String,
+    resultado: String,
+    evidencia: Option<String>,
+) -> Result<String, String> {
+    let ev = evidencia.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        xoxete::guardar(&tipo, &contexto, &accion, &resultado, &ev)
+    })
+    .await
+    .map_err(|e| format!("tarea cancelada: {e}"))?
+}
+
+/* ---------------- MCP Y CENTRO DE HERRAMIENTAS ---------------- */
+
+/// Servidores MCP declarados en los mcp.json, con su permiso y su estado real.
+#[tauri::command]
+fn mcp_servers(state: State<'_, AppState>) -> Vec<mcp::ServerInfo> {
+    let db = guard(&state.db);
+    mcp::servidores(&db)
+}
+
+/// Autoriza o revoca un servidor. Autorizar permite lanzarlo: es un proceso externo.
+#[tauri::command]
+fn mcp_grant(state: State<'_, AppState>, server: String, granted: bool) -> Result<bool, String> {
+    let db = guard(&state.db);
+    mcp::autorizar(&db, &server, granted)?;
+    drop(db);
+    logs::append(
+        "warn",
+        &format!(
+            "mcp: «{server}» {}",
+            if granted {
+                "AUTORIZADO (podrá lanzarse como proceso)"
+            } else {
+                "revocado"
+            }
+        ),
+    );
+    Ok(granted)
+}
+
+/// Conecta con un servidor autorizado y guarda sus herramientas.
+#[tauri::command]
+async fn mcp_discover(
+    state: State<'_, AppState>,
+    server: String,
+) -> Result<Vec<mcp::McpTool>, String> {
+    let autorizado = {
+        let db = guard(&state.db);
+        mcp::esta_autorizado(&db, &server)
+    };
+    if !autorizado {
+        return Err(format!(
+            "«{server}» no está autorizado: autorízalo antes de conectarlo"
+        ));
+    }
+    let lista = mcp::conectar(&server).await?;
+    {
+        let db = guard(&state.db);
+        mcp::guardar_en(&db, &server, &lista)?;
+    }
+    logs::append(
+        "info",
+        &format!("mcp «{server}»: {} herramienta(s) descubierta(s)", lista.len()),
+    );
+    Ok(lista)
+}
+
+/// Ejecuta una herramienta MCP ya descubierta. Exige que su servidor esté autorizado.
+#[tauri::command]
+async fn mcp_call(
+    state: State<'_, AppState>,
+    server: String,
+    tool: String,
+    arguments: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let autorizado = {
+        let db = guard(&state.db);
+        mcp::esta_autorizado(&db, &server)
+    };
+    if !autorizado {
+        return Err(format!(
+            "«{server}» no está autorizado: no se ejecuta nada de un servidor sin permiso"
+        ));
+    }
+    logs::append(
+        "warn",
+        &format!("mcp: ejecutando {server}::{tool}"),
+    );
+    mcp::llamar(&server, &tool, arguments).await
+}
+
+#[tauri::command]
+fn mcp_tools(state: State<'_, AppState>, server: String) -> Vec<mcp::McpTool> {
+    let db = guard(&state.db);
+    mcp::tools_guardadas(&db, &server)
+}
+
+/// Registro central: núcleo + MCP, con estado comprobado donde se puede.
+#[tauri::command]
+fn tools_registry(state: State<'_, AppState>) -> Vec<tools::ToolEntry> {
+    let db = guard(&state.db);
+    tools::registro(&db)
+}
+
+#[tauri::command]
+fn tools_resumen(state: State<'_, AppState>) -> tools::Resumen {
+    let db = guard(&state.db);
+    tools::resumen(&db)
+}
+
+/// Investigación autónoma: lee fuentes públicas y escribe informe. No instala nada.
+#[tauri::command]
+async fn research_auto(
+    state: State<'_, AppState>,
+    objetivo: String,
+    limite: Option<usize>,
+) -> Result<research::AutoInforme, String> {
+    research::validar_objetivo(&objetivo)?;
+    let items = research::scan_all().await;
+    let informe = {
+        let db = guard(&state.db);
+        research::autonomous_con(&db, &objetivo, limite.unwrap_or(10), items)?
+    };
+    logs::append(
+        "info",
+        &format!(
+            "investigación autónoma «{}»: {} relevante(s), {} nuevo(s) → {}",
+            informe.objetivo,
+            informe.relevantes.len(),
+            informe.nuevos,
+            informe.ruta
+        ),
+    );
+    Ok(informe)
+}
+
+/* ---------------- LABORATORIO EXPERIMENTAL ---------------- */
+
+/// Catálogo de técnicas con su nivel, mecanismo y estado real en esta máquina.
+#[tauri::command]
+fn lab_catalogo() -> Vec<lab::Experimento> {
+    lab::catalogo()
+}
+
+/// Banco de pruebas: una generación controlada con métricas medidas.
+#[tauri::command]
+async fn lab_bench(
+    engine: String,
+    model: String,
+    params: engines::InferenceParams,
+    prompt: Option<String>,
+    tokens: Option<u64>,
+) -> lab::BenchResult {
+    let texto = prompt.unwrap_or_else(|| lab::PROMPT_PRUEBA.to_string());
+    let n = tokens.unwrap_or(128);
+    let r = lab::benchmark(&engine, &model, &params, &texto, n).await;
+    let _ = lab::guardar_resultados(std::slice::from_ref(&r));
+    logs::append(
+        if r.ok { "info" } else { "warn" },
+        &format!(
+            "lab bench {}/{}: {:.1} tok/s · {} MB pico · {}",
+            engine,
+            model,
+            r.tok_s,
+            r.vram_pico.iter().map(|g| g.pico_mb).max().unwrap_or(0),
+            if r.ok { r.etiqueta.as_str() } else { r.error.as_str() }
+        ),
+    );
+    r
+}
+
+/// A/B: misma petición con dos configuraciones del mismo modelo.
+#[tauri::command]
+async fn lab_ab(
+    engine: String,
+    model: String,
+    a: engines::InferenceParams,
+    b: engines::InferenceParams,
+    prompt: Option<String>,
+    tokens: Option<u64>,
+) -> lab::Comparacion {
+    let texto = prompt.unwrap_or_else(|| lab::PROMPT_PRUEBA.to_string());
+    let n = tokens.unwrap_or(128);
+    let c = lab::comparar(&engine, &model, &a, &b, &texto, n).await;
+    let _ = lab::guardar_resultados(&[c.a.clone(), c.b.clone()]);
+    logs::append(
+        "info",
+        &format!("lab A/B {}/{}: {}", engine, model, c.veredicto),
+    );
+    c
+}
+
+#[tauri::command]
+fn lab_historial() -> Vec<lab::BenchResult> {
+    lab::historial()
+}
+
+/// Activa un experimento guardando antes la configuración que había.
+#[tauri::command]
+fn lab_activar(
+    experimento: String,
+    engine: String,
+    model: String,
+) -> Result<(engines::InferenceParams, String), String> {
+    let r = lab::activar(&experimento, &engine, &model);
+    match &r {
+        Ok((_, msg)) => logs::append("info", &format!("lab activar: {msg}")),
+        Err(e) => logs::append("warn", &format!("lab activar rechazado: {e}")),
+    }
+    r
+}
+
+/// Devuelve la configuración que había antes de activar el experimento.
+#[tauri::command]
+fn lab_restaurar(engine: String, model: String) -> Option<engines::InferenceParams> {
+    let r = lab::restaurar(&engine, &model);
+    if r.is_some() {
+        logs::append("info", &format!("lab restaurar: {engine}/{model}"));
+    }
+    r
+}
+
 /* ------------------------- KUKIA FUTURE GAMING RADAR ------------------------- */
 
 #[derive(Serialize)]
@@ -1333,6 +2601,78 @@ async fn anime_convert(
     Ok(r)
 }
 
+/* ------------- KUKIA UNIVERSAL REALITY CONVERTER (RC1 + RC2) ------------- */
+
+/// Registro de motores con diagnóstico real (ComfyUI, Ollama, Wan2GP, Maestro).
+#[tauri::command]
+async fn studio_motores() -> Vec<kukia_core::studio::Motor> {
+    kukia_core::studio::engines::todos().await
+}
+
+/// VRAM libre por tarjeta y RAM disponible, sin tocar nada.
+#[tauri::command]
+fn studio_presupuesto() -> kukia_core::studio::Presupuesto {
+    kukia_core::studio::presupuesto()
+}
+
+/// Catálogo de estilos tal cual está en el JSON (sin diagnosticar).
+#[tauri::command]
+fn studio_estilos() -> Result<Vec<kukia_core::studio::Estilo>, String> {
+    kukia_core::studio::estilos()
+}
+
+/// Catálogo cruzado con lo que hay instalado y con la memoria libre.
+#[tauri::command]
+async fn studio_diagnostico() -> Result<Vec<kukia_core::studio::DiagnosticoEstilo>, String> {
+    kukia_core::studio::diagnostico_estilos().await
+}
+
+/// Sondeo + estilo detectado + planos + veredicto, sin ejecutar difusión.
+#[tauri::command]
+async fn studio_preflight(
+    ruta: String,
+    destino: Option<String>,
+    modelo: Option<String>,
+    umbral: Option<f64>,
+) -> Result<kukia_core::studio::Preflight, String> {
+    kukia_core::studio::preflight(
+        &ruta,
+        destino.as_deref(),
+        modelo.as_deref(),
+        umbral.unwrap_or(0.30),
+    )
+    .await
+}
+
+/// Solo segmentación de planos (un plano = un job).
+#[tauri::command]
+async fn studio_planos(
+    ruta: String,
+    umbral: Option<f64>,
+) -> Result<Vec<kukia_core::studio::Plano>, String> {
+    kukia_core::studio::detect::planos(&ruta, umbral.unwrap_or(0.30)).await
+}
+
+/// Solo detección de estilo con VLM local, con confianza y texto crudo.
+#[tauri::command]
+async fn studio_detectar(
+    ruta: String,
+    modelo: Option<String>,
+) -> Result<kukia_core::studio::EstiloDetectado, String> {
+    kukia_core::studio::detect::detectar_estilo(&ruta, modelo.as_deref()).await
+}
+
+/// Recorta un plano a un archivo aparte, sin recomprimir.
+#[tauri::command]
+fn studio_cortar_plano(
+    ruta: String,
+    inicio: f64,
+    segundos: f64,
+    destino: String,
+) -> Result<String, String> {
+    kukia_core::studio::detect::partir_plano(&ruta, inicio, segundos, &destino)
+}
+
 /* ------------------------- Logs ------------------------- */
 
 #[tauri::command]
@@ -1348,13 +2688,47 @@ pub fn run() {
     let cfg = config::load_config();
     logs::append("info", "KUKIA CODE arrancando");
 
+    // Nombres distintos a los de los comandos: dentro de `run()` el macro
+    // `generate_handler!` los invoca por nombre y un `let` los taparía.
+    let halt = Arc::new(AtomicBool::new(false));
+    let slots = Arc::new(AtomicUsize::new(2));
+    {
+        // Lo que quedó «running» de la sesión anterior no lo está haciendo nadie.
+        match jobs::requeue_stale(&db) {
+            Ok(0) => {}
+            Ok(n) => logs::append(
+                "warn",
+                &format!("cola: {n} trabajo(s) interrumpidos devueltos a la cola"),
+            ),
+            Err(e) => logs::append("warn", &format!("cola: no se pudo recuperar el estado: {e}")),
+        }
+    }
+    let db_jobs = Arc::new(Mutex::new(db));
+    let stop_spawn = halt.clone();
+    let workers_spawn = slots.clone();
+    let db_spawn = db_jobs.clone();
+
     tauri::Builder::default()
         .manage(AppState {
-            db: Arc::new(Mutex::new(db)),
+            db: db_jobs,
             config: Mutex::new(cfg),
             running: Arc::new(Mutex::new(HashMap::new())),
+            halt_jobs: halt,
+            job_slots: slots,
         })
-        .setup(|app| {
+
+        .setup(move |app| {
+            // SQ1 — pool acotado de workers de la cola. Como máximo `MAX_WORKERS`
+            // tareas, y solo están activas las que el usuario permita.
+            for idx in 0..jobs::MAX_WORKERS {
+                let db = db_spawn.clone();
+                let stop = stop_spawn.clone();
+                let activos = workers_spawn.clone();
+                tauri::async_runtime::spawn(async move {
+                    worker_loop(idx, db, stop, activos).await;
+                });
+            }
+
             // KUKIA EXPERIMENTAL AI RADAR — vigilancia periódica (solo metadatos).
             // No instala, no descarga binarios y respeta el interruptor de configuración.
             let handle = app.handle().clone();
@@ -1472,6 +2846,14 @@ pub fn run() {
             anime_output_path,
             anime_history,
             anime_convert,
+            studio_motores,
+            studio_presupuesto,
+            studio_estilos,
+            studio_diagnostico,
+            studio_preflight,
+            studio_planos,
+            studio_detectar,
+            studio_cortar_plano,
             projects_list,
             project_create,
             project_update,
@@ -1479,12 +2861,86 @@ pub fn run() {
             project_active,
             vram_report,
             vram_fits,
+            vram_unload,
+            vram_unload_seleccion,
+            vram_historial,
+            vram_unload_all,
+            vram_release_engine,
+            vram_release_gpu,
+            vram_release_everything,
+            control_capacidades,
+            control_metricas,
+            perfiles_listar,
+            perfil_guardar,
+            perfil_borrar,
+            perfil_aplicar,
+            perfil_restaurar_anterior,
+            jobs_enqueue,
+            jobs_list,
+            jobs_stats,
+            jobs_cancel,
+            jobs_cancel_all,
+            jobs_clear,
+            jobs_stop,
+            jobs_resume,
+            jobs_estado,
+            jobs_workers,
+            catalog_list,
+            catalog_adapters,
+            catalog_route,
+            catalog_bind_set,
+            catalog_binds,
+            catalog_bind_clear,
+            catalog_chat,
+            mcp_servers,
+            mcp_grant,
+            mcp_discover,
+            mcp_call,
+            mcp_tools,
+            tools_registry,
+            tools_resumen,
+            research_auto,
+            hub_buscar_ollama,
+            hub_buscar_hf,
+            hub_manifest,
+            hub_gguf,
+            hub_compat,
+            hub_pull,
+            lab_catalogo,
+            lab_bench,
+            lab_ab,
+            lab_historial,
+            lab_activar,
+            lab_restaurar,
+            engines_status,
+            engine_cards,
+            engine_card,
+            engine_params_get,
+            engine_params_set,
+            engine_preflight,
+            engine_load,
             gaming_scan,
             gaming_items,
             gaming_alerts,
             gaming_report,
             gaming_lab_path,
-            logs_tail
+            logs_tail,
+            puente_estado,
+            puente_modelos,
+            puente_agentes,
+            puente_preguntar,
+            puente_servidor_arrancar,
+            puente_servidor_parar,
+            kukia_server_start,
+            kukia_server_status,
+            kukia_server_stop,
+            puente_snippet,
+            ecosistema_estado,
+            ecosistema_enrutar,
+            ecosistema_universal,
+            xoxete_estado,
+            xoxete_memorias,
+            xoxete_recordar
         ])
         .run(tauri::generate_context!())
         .expect("error ejecutando KUKIA CODE");
