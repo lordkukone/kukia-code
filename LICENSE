@@ -1,51 +1,60 @@
-KUKIA CODE — Licencia de uso
+KUKIA CODE - AVISO DE DERECHOS DE AUTOR (TODOS LOS DERECHOS RESERVADOS)
+Copyright (c) 2026 RMR (LordKukone). Todos los derechos reservados.
+=================================================================
 
-Copyright (c) 2026 Xoxete (GitHub: @lordkukone)
-Todos los derechos reservados. All rights reserved.
+Titular: RMR (LordKukone) - https://github.com/lordkukone
+Obra: el proyecto KUKIA CODE y todo su contenido: el nucleo (core/), la
+aplicacion de escritorio (src-tauri/ y app/), las herramientas del chat, el
+catalogo de modelos, la memoria, la documentacion, los informes, los textos,
+las imagenes y el nombre de la aplicacion.
 
-Este software, su código fuente, su documentación, su interfaz, sus textos,
-sus imágenes y su nombre ("KUKIA CODE", en adelante «el Software») son
-propiedad exclusiva de su autor y están protegidos por las leyes de propiedad
-intelectual y derechos de autor aplicables, incluidos los convenios
-internacionales.
+1. QUE SE PERMITE
+   Se permite LEER, descargar y estudiar el codigo a traves de GitHub para
+   comprobar como funciona el proyecto y verificar sus afirmaciones. Descargar
+   una copia para leerla no da ningun derecho sobre ella.
 
-1. TITULARIDAD
-   La titularidad del Software, de su código y de cuantas obras derivadas se
-   creen a partir de él corresponde íntegramente al autor indicado arriba.
-   La publicación del código en GitHub no supone cesión, renuncia ni
-   limitación alguna de esos derechos.
+2. QUE NO SE PERMITE
+   Sin permiso previo y por escrito del titular no se permite:
+   a) copiar, reproducir ni redistribuir el codigo, ni en todo ni en parte;
+   b) modificarlo ni crear obras derivadas;
+   c) publicarlo en otro repositorio, web o paquete;
+   d) usarlo para operar una red, un servicio, un producto o una moneda;
+   e) venderlo, alquilarlo, sublicenciarlo o incluirlo en otro producto;
+   f) quitar o cambiar este aviso ni los creditos del autor.
 
-2. USO PERMITIDO
-   Se permite consultar y estudiar el código publicado. Cualquier otro uso
-   —copiar, modificar, traducir, redistribuir, publicar, sublicenciar,
-   vender, alquilar, integrar en otro producto o explotar comercialmente—
-   requiere autorización previa y por escrito del titular.
+3. MARCAS
+   Los nombres KUKIA, KUKIA CODE, KIA y KUKIA Network, el logo de la moneda y la
+   identidad visual de la aplicacion son del titular. Este aviso no concede licencia de marca
+   alguna.
 
-3. PROHIBICIONES
-   Queda prohibido, sin autorización expresa del titular:
-   a) eliminar o alterar los avisos de copyright y de autoría;
-   b) usar el nombre «KUKIA», «KUKIA CODE» o signos distintivos similares
-      para identificar productos derivados o servicios de terceros;
-   c) distribuir el Software, total o parcialmente, por cualquier medio;
-   d) crear obras derivadas y publicarlas.
+4. SIN LICENCIA IMPLICITA
+   Publicar este codigo en un repositorio publico no concede ninguna licencia,
+   ni expresa ni implicita, por el simple hecho de estar visible. No se concede
+   permiso por uso, por costumbre ni por silencio.
 
-4. CONTRIBUCIONES
-   Cualquier aportación enviada al repositorio se entiende realizada bajo
-   esta misma licencia y su titularidad se cede al autor del Software, salvo
-   pacto escrito en contrario.
+5. GARANTIAS
+   El software se entrega "TAL CUAL", sin garantia de ningun tipo, expresa o
+   implicita, incluida la de que sirva para un fin concreto. El titular no
+   responde de perdidas de datos, de KIA ni de danos derivados de su uso.
 
-5. SIN GARANTÍA
-   EL SOFTWARE SE PROPORCIONA «TAL CUAL», SIN GARANTÍA DE NINGÚN TIPO,
-   EXPRESA O IMPLÍCITA, INCLUIDAS, ENTRE OTRAS, LAS GARANTÍAS DE
-   COMERCIABILIDAD, IDONEIDAD PARA UN FIN CONCRETO Y NO INFRACCIÓN.
-   EN NINGÚN CASO EL AUTOR SERÁ RESPONSABLE DE DAÑOS DIRECTOS, INDIRECTOS,
-   INCIDENTALES O CONSECUENTES DERIVADOS DEL USO DEL SOFTWARE, INCLUIDA LA
-   PÉRDIDA DE DATOS O DE BENEFICIOS.
+6. PERMISOS
+   Para cualquier uso distinto de los permitidos en el punto 1, pide permiso al
+   titular por GitHub (https://github.com/lordkukone). Un permiso concedido
+   vale solo para lo que se conceda y por escrito.
 
-6. LEGISLACIÓN APLICABLE
-   Esta licencia se rige por la legislación española. Para cualquier
-   controversia serán competentes los juzgados y tribunales del domicilio del
-   titular.
+7. LEY APLICABLE
+   Este aviso se rige por la legislacion espanola y por los convenios
+   internacionales de propiedad intelectual que resulten de aplicacion.
 
-Para solicitar permiso de uso, contacto a través del perfil
-https://github.com/lordkukone
+Este texto es un aviso de derechos de autor, no asesoramiento juridico.
+
+-----------------------------------------------------------------
+KUKIA - COPYRIGHT NOTICE (ALL RIGHTS RESERVED)
+Copyright (c) 2026 RMR (LordKukone). All rights reserved.
+
+Reading and studying the source code through GitHub is allowed in order to
+verify the project's claims. No permission is granted to copy, modify,
+redistribute, sublicense, sell or use this code to operate any network, service
+or product without the prior written consent of the copyright holder. The
+software is provided "AS IS", without warranty of any kind. This text is a
+copyright notice, not legal advice.
