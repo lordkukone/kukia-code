@@ -570,7 +570,7 @@ pub async fn ejecutar(
         "gpu_stats" => {
             let st = crate::gpu::stats();
             if st.is_empty() {
-                Err("nvidia-smi no devolvió ninguna GPU".into())
+                Err("no se detectó ninguna tarjeta gráfica".into())
             } else {
                 serde_json::to_string_pretty(&st).map_err(|e| e.to_string())
             }

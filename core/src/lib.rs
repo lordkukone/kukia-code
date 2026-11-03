@@ -13,6 +13,7 @@ pub mod ecosystem;
 pub mod engines;
 pub mod gaming;
 pub mod gpu;
+pub mod gpus;
 pub mod hub;
 pub mod jobs;
 pub mod lab;

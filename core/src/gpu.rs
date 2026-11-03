@@ -1,10 +1,20 @@
+//! Información de GPU y del sistema para la interfaz.
+//!
+//! La lectura de tarjetas vive en [`crate::gpus`], que funciona con **cualquier**
+//! fabricante (DXGI + contadores de Windows) y solo rellena temperatura, potencia
+//! y relojes cuando el fabricante los publica (`nvidia-smi`). Aquí se le da la
+//! forma que ya consume la interfaz, sin suponer ninguna tarjeta concreta.
+
 use serde::Serialize;
-use std::process::Command;
+
+use crate::gpus;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GpuInfo {
     pub index: u32,
     pub name: String,
+    /// `nvidia`, `amd`, `intel`, `microsoft` o `desconocido`.
+    pub fabricante: String,
     pub memory_total_mb: u64,
 }
 
@@ -12,6 +22,7 @@ pub struct GpuInfo {
 pub struct GpuStat {
     pub index: u32,
     pub name: String,
+    pub fabricante: String,
     pub utilization: f64,
     pub memory_used_mb: u64,
     pub memory_total_mb: u64,
@@ -19,6 +30,9 @@ pub struct GpuStat {
     pub power_w: f64,
     pub clock_graphics_mhz: u64,
     pub clock_memory_mhz: u64,
+    /// De dónde sale el detalle de esta tarjeta. Se dice en vez de callarlo:
+    /// en AMD o Intel no hay temperatura ni potencia, y eso no es un 0 real.
+    pub fuente: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,68 +45,47 @@ pub struct SystemInfo {
     pub data_dir: String,
 }
 
-#[cfg(windows)]
-fn hidden(cmd: &mut Command) -> &mut Command {
-    use std::os::windows::process::CommandExt;
-    cmd.creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-}
-
-#[cfg(not(windows))]
-fn hidden(cmd: &mut Command) -> &mut Command {
-    cmd
-}
-
-fn nvidia_smi(query: &str) -> Option<String> {
-    let mut cmd = Command::new("nvidia-smi");
-    cmd.args(["--query-gpu", query, "--format=csv,noheader,nounits"]);
-    let out = hidden(&mut cmd).output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).to_string())
-}
-
+/// Tarjetas del equipo, de cualquier fabricante.
 pub fn gpus() -> Vec<GpuInfo> {
-    let Some(raw) = nvidia_smi("index,name,memory.total") else {
-        return Vec::new();
-    };
-    raw.lines()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
-            if parts.len() < 3 {
-                return None;
-            }
-            Some(GpuInfo {
-                index: parts[0].parse().ok()?,
-                name: parts[1].to_string(),
-                memory_total_mb: parts[2].parse().unwrap_or(0),
-            })
+    gpus::tarjetas()
+        .into_iter()
+        .map(|t| GpuInfo {
+            index: t.index,
+            name: t.nombre,
+            fabricante: t.fabricante,
+            memory_total_mb: t.total_mb,
         })
         .collect()
 }
 
+/// Uso por tarjeta: memoria siempre (DXGI + contadores), y temperatura, potencia,
+/// relojes y utilización solo si el fabricante los publica.
 pub fn stats() -> Vec<GpuStat> {
-    let query = "index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,clocks.gr,clocks.mem";
-    let Some(raw) = nvidia_smi(query) else {
-        return Vec::new();
-    };
-    raw.lines()
-        .filter_map(|line| {
-            let p: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
-            if p.len() < 9 {
-                return None;
+    let smi = gpus::nvidia_smi();
+    gpus::tarjetas()
+        .into_iter()
+        .map(|t| {
+            let d = smi
+                .iter()
+                .find(|s| gpus::normaliza(&s.name) == gpus::normaliza(&t.nombre));
+            let usado = d.map(|s| s.used_mb).or(t.usada_mb).unwrap_or(0);
+            GpuStat {
+                index: t.index,
+                name: t.nombre,
+                fabricante: t.fabricante,
+                utilization: d.map(|s| s.utilization).unwrap_or(0.0),
+                memory_used_mb: usado.min(t.total_mb),
+                memory_total_mb: t.total_mb,
+                temperature_c: d.map(|s| s.temperature_c).unwrap_or(0.0),
+                power_w: d.map(|s| s.power_w).unwrap_or(0.0),
+                clock_graphics_mhz: d.map(|s| s.clock_graphics_mhz).unwrap_or(0),
+                clock_memory_mhz: d.map(|s| s.clock_memory_mhz).unwrap_or(0),
+                fuente: if d.is_some() {
+                    "nvidia-smi + contadores de Windows".to_string()
+                } else {
+                    t.fuente_uso.clone()
+                },
             }
-            Some(GpuStat {
-                index: p[0].parse().ok()?,
-                name: p[1].to_string(),
-                utilization: p[2].parse().unwrap_or(0.0),
-                memory_used_mb: p[3].parse().unwrap_or(0),
-                memory_total_mb: p[4].parse().unwrap_or(0),
-                temperature_c: p[5].parse().unwrap_or(0.0),
-                power_w: p[6].parse().unwrap_or(0.0),
-                clock_graphics_mhz: p[7].parse().unwrap_or(0),
-                clock_memory_mhz: p[8].parse().unwrap_or(0),
-            })
         })
         .collect()
 }
@@ -138,9 +131,23 @@ mod tests {
     }
 
     #[test]
-    fn stats_parse_is_safe_without_gpu() {
-        // No debe entrar en pánico aunque nvidia-smi no exista.
+    fn stats_is_safe_without_gpu() {
+        // Con o sin `nvidia-smi` (AMD, Intel, máquina sin GPU) esto no revienta, y
+        // ninguna tarjeta puede tener más memoria usada que total.
         let s = stats();
-        assert!(s.len() <= 8);
+        for g in &s {
+            assert!(g.memory_used_mb <= g.memory_total_mb, "{}: usado > total", g.name);
+            assert!(g.memory_total_mb > 0, "{}: total 0", g.name);
+        }
+        assert!(s.len() <= 32);
+    }
+
+    #[test]
+    fn las_tarjetas_traen_nombre_y_fabricante() {
+        for g in gpus() {
+            assert!(!g.name.is_empty());
+            assert!(!g.fabricante.is_empty());
+            assert!(g.memory_total_mb > 0);
+        }
     }
 }

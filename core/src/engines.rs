@@ -779,7 +779,10 @@ pub async fn preflight(engine: &str, model: &str, p: &InferenceParams) -> Prefli
         detail = format!(
             "{detail} · GPU{} ({}): {:.2} GB libres → {}",
             g.index,
-            g.name.replace("NVIDIA GeForce ", ""),
+            g.name
+                .replace("NVIDIA GeForce ", "")
+                .replace("AMD Radeon ", "")
+                .replace("Intel(R) ", ""),
             g.free_gb,
             if fits { "cabe" } else { "NO cabe" }
         );

@@ -695,17 +695,17 @@ mod tests {
     }
 
     #[test]
-    fn un_8b_q4_cabe_en_la_5060() {
+    fn un_8b_q4_cabe_en_la_tarjeta_grande() {
         let gpus = vec![
             GpuLibre {
                 index: 0,
-                name: "RTX 5070".into(),
+                name: "Tarjeta A".into(),
                 total_gb: 12.0,
                 free_gb: 8.0,
             },
             GpuLibre {
                 index: 1,
-                name: "RTX 5060 Ti".into(),
+                name: "Tarjeta B".into(),
                 total_gb: 16.0,
                 free_gb: 15.0,
             },
@@ -720,13 +720,13 @@ mod tests {
         let gpus = vec![
             GpuLibre {
                 index: 0,
-                name: "RTX 5070".into(),
+                name: "Tarjeta A".into(),
                 total_gb: 12.0,
                 free_gb: 10.0,
             },
             GpuLibre {
                 index: 1,
-                name: "RTX 5060 Ti".into(),
+                name: "Tarjeta B".into(),
                 total_gb: 16.0,
                 free_gb: 15.0,
             },

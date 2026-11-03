@@ -82,33 +82,50 @@ fn run_smi(args: &[&str]) -> String {
     }
 }
 
-/// Lee VRAM por GPU con memoria total, usada y libre.
+/// VRAM por GPU, con memoria total, usada y libre.
+///
+/// La lista de tarjetas sale de DXGI, así que aparecen las de **cualquier**
+/// fabricante (NVIDIA, AMD, Intel). Para NVIDIA se prefiere lo que mide
+/// `nvidia-smi`, que además distingue la parte reservada; en AMD o Intel se usa el
+/// contador de Windows, y si ningún fabricante publica el uso se informa 0 en vez
+/// de inventarlo.
 pub fn gpus_vram() -> Vec<GpuVram> {
-    let out = run_smi(&[
-        "--query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu",
-        "--format=csv,noheader,nounits",
-    ]);
-    let mut list = Vec::new();
-    for line in out.lines() {
-        let p: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
-        if p.len() < 6 {
-            continue;
-        }
-        let total: u64 = p[2].parse().unwrap_or(0);
-        let used: u64 = p[3].parse().unwrap_or(0);
-        let free: u64 = p[4].parse().unwrap_or(0);
-        let reserved = total.saturating_sub(used + free);
-        list.push(GpuVram {
-            index: p[0].parse().unwrap_or(0),
-            name: p[1].to_string(),
-            total_mb: total,
-            used_mb: used,
-            free_mb: free,
-            reserved_mb: reserved,
-            utilization: p[5].parse().unwrap_or(0),
-        });
-    }
-    list
+    let smi = crate::gpus::nvidia_smi();
+    crate::gpus::tarjetas()
+        .into_iter()
+        .map(|t| {
+            let d = smi
+                .iter()
+                .find(|s| crate::gpus::normaliza(&s.name) == crate::gpus::normaliza(&t.nombre));
+            match d {
+                Some(s) => {
+                    let total = s.total_mb.max(t.total_mb);
+                    GpuVram {
+                        index: t.index,
+                        name: t.nombre,
+                        total_mb: total,
+                        used_mb: s.used_mb.min(total),
+                        free_mb: s.free_mb.min(total),
+                        reserved_mb: total.saturating_sub(s.used_mb + s.free_mb),
+                        utilization: s.utilization.max(0.0) as u64,
+                    }
+                }
+                None => {
+                    let total = t.total_mb;
+                    let used = t.usada_mb.unwrap_or(0).min(total);
+                    GpuVram {
+                        index: t.index,
+                        name: t.nombre,
+                        total_mb: total,
+                        used_mb: used,
+                        free_mb: total - used,
+                        reserved_mb: 0,
+                        utilization: 0,
+                    }
+                }
+            }
+        })
+        .collect()
 }
 
 /// Procesos con memoria en GPU (si el driver lo permite).
@@ -1291,18 +1308,21 @@ mod tests {
     }
 
     #[test]
-    fn detecta_gpus_reales() {
+    fn detecta_las_tarjetas_del_equipo() {
+        // Sin nombres ni modelos concretos: lo que haya en la máquina. En una AMD o
+        // una Intel esto antes devolvía vacío y la app se quedaba sin VRAM.
         let gpus = gpus_vram();
-        println!("GPUs detectadas: {}", gpus.len());
+        println!("tarjetas detectadas: {}", gpus.len());
         for g in &gpus {
             println!(
                 "  {} {} total={}MB usada={}MB libre={}MB reservada={}MB",
                 g.index, g.name, g.total_mb, g.used_mb, g.free_mb, g.reserved_mb
             );
+            assert!(!g.name.is_empty(), "una tarjeta sin nombre no es una tarjeta");
+            assert!(g.total_mb > 0, "{}: memoria total 0", g.name);
+            assert!(g.used_mb <= g.total_mb, "{}: usada > total", g.name);
+            assert!(g.free_mb <= g.total_mb, "{}: libre > total", g.name);
         }
-        assert!(!gpus.is_empty(), "nvidia-smi debe devolver al menos una GPU");
-        assert!(gpus.iter().any(|g| g.name.contains("5070")));
-        assert!(gpus.iter().any(|g| g.name.contains("5060")));
     }
 
     #[test]

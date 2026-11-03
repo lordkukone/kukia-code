@@ -60,7 +60,9 @@ usa si no se autoriza. Se puede fijar un modelo por ámbito a mano.
 ### Lo demás
 
 - Memoria persistente con búsqueda.
-- Panel de VRAM con guarda antes de cargar y descarga selectiva.
+- Panel de VRAM con guarda antes de cargar y descarga selectiva, con tarjetas
+  **NVIDIA, AMD e Intel** (DXGI + contadores de Windows; temperatura, potencia y
+  relojes solo cuando el fabricante los publica).
 - Cliente **MCP** (stdio y http) con autorización servidor a servidor.
 - Servidor local compatible OpenAI (`/v1`) **solo en loopback** y con token,
   para conectar OpenCode u otros clientes.

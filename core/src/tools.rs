@@ -174,7 +174,7 @@ fn sondar(db: &Database, id: &str, servidores: &[mcp::ServerInfo]) -> (String, S
             if g.is_empty() {
                 (
                     "error".into(),
-                    "nvidia-smi no devolvió ninguna GPU".into(),
+                    "no se detectó ninguna tarjeta gráfica".into(),
                 )
             } else {
                 let detalle = g

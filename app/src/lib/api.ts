@@ -5,6 +5,8 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 export interface GpuInfo {
   index: number;
   name: string;
+  /** "nvidia", "amd", "intel", "microsoft" o "desconocido". */
+  fabricante?: string;
   memory_total_mb: number;
 }
 
@@ -20,6 +22,10 @@ export interface SystemInfo {
 export interface GpuStat {
   index: number;
   name: string;
+  /** "nvidia", "amd", "intel", "microsoft" o "desconocido". */
+  fabricante?: string;
+  /** De donde sale el detalle: nvidia-smi, contadores de Windows o no disponible. */
+  fuente?: string;
   utilization: number;
   memory_used_mb: number;
   memory_total_mb: number;
