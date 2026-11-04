@@ -83,7 +83,7 @@ impl Default for LocalGpuCfg {
             perfil: "solo_i9".into(),
             puerto: 8080,
             ctx: 8192,
-            ngl: 99,
+            ngl: 0, // 0 = que llama.cpp reparta las capas (necesario para contexto grande)
             tensor_split: vec![35, 40, 25],
             rpc_host: "192.168.50.2:50052".into(),
             vram_i7_gb: 8.0,

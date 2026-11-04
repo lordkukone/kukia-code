@@ -141,3 +141,18 @@ con 22,86 GB de modelo + 29 GB de VRAM total.
 
 Conclusion: nativo 262.144, **usable verificado 131.072** con 3 GPUs (y 131.072 tambien con 2 GPUs,
 mas lento). La config se queda en 131072.
+
+## Fix del reparto de capas (04/11/2026)
+
+| Archivo | Cambio | SHA-256 |
+|---|---|---|
+| `core/src/localgpu/flags.rs` | `-ngl` solo se pasa si `ngl > 0`; con 0 reparte llama.cpp | `d09c15fc8c85b92ae7e367805ebc061a8084e82b5a002ba994ccbaca2656661a` |
+| `core/src/localgpu/mod.rs` | `ngl` por defecto pasa de 99 a **0 (automatico)** | `11493a400889b72c68d7ab3e8f8a65ff101409ed574c436ddf33b67592aec250` |
+
+Motivo: llama.cpp b12110 aborta el ajuste automatico si se le fuerza `-ngl` ("failed to fit params
+to free device memory: n_gpu_layers already set by user to 99, abort"). Con contexto grande eso
+impide cargar. Nuevo test: `sin_ngl_cuando_es_cero_para_que_decida_llama_cpp` (24 tests en localgpu).
+
+Verificado con el codigo de KUKIA y las 3 GPUs: sonda `ok=true` en 2 ms, decision `TresGpus`,
+arranque con `--rpc 192.168.50.2:50052 --tensor-split 35,40,25`, modelo cargado en 73,1 s
+y parada limpia (EXIT 0, sin hijos).

@@ -64,8 +64,11 @@ pub fn argumentos(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<Vec<String>, Stri
     let mut a: Vec<String> = Vec::new();
     a.push("-m".into());
     a.push(cfg.modelo.trim().to_string());
-    a.push("-ngl".into());
-    a.push(cfg.ngl.to_string());
+    // Con 0 no se pasa la bandera: llama.cpp reparte las capas segun la VRAM libre.
+    if cfg.ngl > 0 {
+        a.push("-ngl".into());
+        a.push(cfg.ngl.to_string());
+    }
     a.push("-c".into());
     a.push(cfg.ctx.to_string());
     a.push("--host".into());
@@ -168,5 +171,13 @@ mod tests {
             assert!(a.iter().any(|x| x == esperado), "falta {esperado} en {a:?}");
         }
         assert!(a.iter().any(|x| x == HOST));
+    }
+
+    #[test]
+    fn sin_ngl_cuando_es_cero_para_que_decida_llama_cpp() {
+        let mut c = cfg_base();
+        c.ngl = 0;
+        let a = argumentos(&c, Perfil::SoloI9).unwrap();
+        assert!(!a.iter().any(|x| x == "-ngl"), "no debe forzar -ngl: {a:?}");
     }
 }
