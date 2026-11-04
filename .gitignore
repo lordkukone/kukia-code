@@ -47,3 +47,4 @@ installer/*.exe
 *.bak
 *.orig
 
+build_tauri.log
