@@ -129,3 +129,15 @@ Medidas con `--rpc 192.168.50.2:50052` (Flint 40B NVFP4):
   por eso a contexto grande es mas rapido que con 2 GPUs (sin capas en CPU).
 - A 65.536 las 2 GPUs siguen siendo mas rapidas: el RPC por LAN cuesta mas de lo que aporta.
 - Config de la app: `perfil = tres_gpus`, `ctx = 131072`, `puerto = 8090`.
+
+## Contexto nativo del Flint 40B y prueba de 262k (04/11/2026)
+
+Metadatos del GGUF (leidos del propio archivo): `general.architecture = flint`,
+`flint.block_count = 49`, **`flint.context_length = 262144`** (256k nativos), GGUF v3, 1264 tensores.
+
+Prueba real con 3 GPUs y `-c 262144`: el servidor arranca pero **no se sostiene**; cae a
+`n_ctx 2048` y termina muriendo (conexion cortada, VRAM liberada a 707 MB). No cabe el KV de 256k
+con 22,86 GB de modelo + 29 GB de VRAM total.
+
+Conclusion: nativo 262.144, **usable verificado 131.072** con 3 GPUs (y 131.072 tambien con 2 GPUs,
+mas lento). La config se queda en 131072.
