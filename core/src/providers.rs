@@ -117,6 +117,9 @@ fn client(timeout: u64) -> reqwest::Client {
 fn base(provider: &str, cfg: &AppConfig) -> String {
     match provider {
         "lmstudio" => "http://127.0.0.1:1234".to_string(),
+        // llama-server que gestiona KUKIA (modulo localgpu). El puerto sale
+        // de la configuracion, no se supone.
+        "llamacpp" => format!("http://127.0.0.1:{}", crate::localgpu::cfg().puerto),
         // El endpoint lo pone el proveedor cloud activo del catálogo.
         "cloud" => {
             let activo = cfg.active_cloud();
@@ -589,7 +592,7 @@ struct Intento {
 
 pub async fn chat(req: &ChatRequest, cfg: &AppConfig) -> Result<ChatResponse, String> {
     match req.provider.as_str() {
-        "lmstudio" | "cloud" => chat_openai(req, cfg).await,
+        "lmstudio" | "cloud" | "llamacpp" => chat_openai(req, cfg).await,
         _ => chat_ollama(req, cfg).await,
     }
 }
@@ -740,7 +743,7 @@ pub async fn chat_stream_con(
     tx: UnboundedSender<ChatEvent>,
 ) -> Result<(), String> {
     let result = match req.provider.as_str() {
-        "lmstudio" | "cloud" => stream_openai(req, cfg, &tx).await,
+        "lmstudio" | "cloud" | "llamacpp" => stream_openai(req, cfg, &tx).await,
         _ => stream_ollama(req, cfg, db, &tx).await,
     };
     if let Err(e) = &result {

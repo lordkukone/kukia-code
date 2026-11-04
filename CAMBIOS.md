@@ -32,3 +32,20 @@ Backup previo: `backups/3gpu_2026-11-04/antes_fase1.zip` (sha256 `adfb465a042bac
 | `core/src/localgpu/rpc.rs` | creado | `b4b18ffa6a4a62542b7cfccd3853f6b6a82747bced36cbef615e0a158d7dc93e` |
 
 Nada borrado. Los tres archivos modificados se pueden recuperar del zip.
+
+## Fase 2 — proveedor, comandos e interfaz (04/11/2026)
+
+| Archivo | Accion | SHA-256 despues |
+|---|---|---|
+| `core/src/providers.rs` | motor `llamacpp` (base, chat y stream) | `7fc8c21fd2a2a075b9b1aa45d5aca82624cd5459310a3758e6fbd42645546879` |
+| `src-tauri/src/lib.rs` | comando `localgpu_set` + registro | `e8df850d82e5b04e916c4b2cd3f74e8e3252cac3b9af9518662eeb5faf1a0dd8` |
+| `app/src/lib/api.ts` | tipos y 7 invocaciones del motor local | `4192e6d5cbf9aa7f2fd0925eaf7bc874b009272655f12fae4dce82425fd7bd87` |
+| `app/src/views/Gpu.tsx` | tarjeta "Motor local" (perfil, modelo, arrancar/parar, sonda, log) | `2123e4815d76c670cdca5eed9cc5fee81d4ebdc10bbeb1b90e361fe4c62c934e` |
+| `core/examples/localgpu_smoke.rs` | creado: prueba real de arranque y parada | `157c122eece45857e50ad7d63b980271a84e1983d63fcc5792ee45f75462d736` |
+
+Config del usuario: copia en `backups/3gpu_2026-11-04/config_antes_fase2.json`.
+Se anadieron solo las claves de `local_gpu`; el resto del JSON queda igual.
+
+Prueba real (04/11 16:07): llama.cpp b12110 CUDA 13.4 en `H:\llama`; modelo Qwen3.5-9B Q6_K.
+Modelo cargado en 9,5 s, escuchando en 127.0.0.1:8099, parada limpia (sin hijos vivos).
+Dato: en esta version el servidor RPC se llama `ggml-rpc-server.exe`, no `rpc-server.exe`.

@@ -130,3 +130,14 @@ Pruebas ejecutadas: 23 tests nuevos en verde; suite del nucleo **221 pasan, 0 fa
 (buscados en PATH y en las rutas tipicas). Los tests no necesitan binarios, pero los criterios 1-4
 de aceptacion siguen sin verificar hasta descargar llama.cpp y poner su ruta en
 `local_gpu.llama_server`.
+
+## 11. Estado tras la Fase 2 (04/11/2026)
+
+- Proveedor `llamacpp` en el nucleo: mismo camino OpenAI que LM Studio, base tomada de
+  `local_gpu.puerto`. El chat puede apuntar al servidor propio sin tocar nada mas.
+- Comando `localgpu_set` y tarjeta en la vista GPU: perfil, modelo (lista de GGUF reales),
+  contexto, arrancar, parar, probar el i7 y las ultimas 40 lineas del servidor.
+- Verificado de verdad: `llama-server` b12110 arranco con un GGUF de 7,3 GB en las 2 GPUs del
+  i9, cargo el modelo en 9,5 s, escucho en 127.0.0.1:8099 y se paro sin dejar hijos.
+- Pendiente: `ggml-rpc-server.exe` en el i7 (necesita arranque remoto o lanzarlo a mano),
+  y la prueba de chat de punta a punta desde la interfaz.

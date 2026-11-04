@@ -2785,6 +2785,14 @@ fn localgpu_config() -> localgpu::LocalGpuCfg {
 }
 
 #[tauri::command]
+fn localgpu_set(cfg: localgpu::LocalGpuCfg) -> Result<localgpu::LocalGpuCfg, String> {
+    let mut full = config::load_config();
+    full.local_gpu = cfg;
+    let guardado = config::save_config(&full)?;
+    Ok(guardado.local_gpu)
+}
+
+#[tauri::command]
 fn localgpu_status() -> localgpu::EstadoProceso {
     localgpu::proceso::status()
 }
@@ -2970,6 +2978,7 @@ pub fn run() {
             chat_stream,
             gpu_stats,
             localgpu_config,
+            localgpu_set,
             localgpu_status,
             localgpu_start,
             localgpu_stop,

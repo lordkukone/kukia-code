@@ -908,6 +908,54 @@ export interface EntrenadorCfg {
   probar: boolean;
 }
 
+/* ============ Motor local llama.cpp ============ */
+
+/** Configuracion del motor local (campo `local_gpu` de AppConfig). */
+export interface LocalGpuCfg {
+  llama_server: string;
+  rpc_server: string;
+  modelo: string;
+  perfil: string;
+  puerto: number;
+  ctx: number;
+  ngl: number;
+  tensor_split: number[];
+  rpc_host: string;
+  vram_i7_gb: number;
+  rutas_gguf: string[];
+  timeout_rpc_s: number;
+  auto_arranque: boolean;
+}
+
+/** Estado del llama-server que gestiona KUKIA. */
+export interface LocalGpuEstado {
+  corriendo: boolean;
+  pid: number | null;
+  perfil: string;
+  modelo: string;
+  puerto: number;
+  iniciado_epoch_s: number | null;
+  lineas: string[];
+  error: string | null;
+  aviso: string | null;
+}
+
+export interface RpcSonda {
+  ok: boolean;
+  destino: string;
+  ms: number;
+  detalle: string;
+}
+
+export interface GgufDisponible {
+  path: string;
+  nombre: string;
+  size_gb: number;
+  cuantizacion: string | null;
+  arquitectura: string | null;
+  valido: boolean;
+}
+
 /* ============ Invocaciones ============ */
 
 export const api = {
@@ -917,6 +965,14 @@ export const api = {
   models: (provider: string) => invoke<ModelInfo[]>("list_models", { provider }),
   chat: (request: ChatRequest) => invoke<ChatResponse>("chat", { request }),
   gpuStats: () => invoke<GpuStat[]>("gpu_stats"),
+
+  localgpuConfig: () => invoke<LocalGpuCfg>("localgpu_config"),
+  localgpuSet: (cfg: LocalGpuCfg) => invoke<LocalGpuCfg>("localgpu_set", { cfg }),
+  localgpuStatus: () => invoke<LocalGpuEstado>("localgpu_status"),
+  localgpuStart: () => invoke<LocalGpuEstado>("localgpu_start"),
+  localgpuStop: () => invoke<LocalGpuEstado>("localgpu_stop"),
+  localgpuProbeRpc: () => invoke<RpcSonda>("localgpu_probe_rpc"),
+  localgpuGgufs: () => invoke<GgufDisponible[]>("localgpu_ggufs", { max: 200 }),
 
   entrenadorProyectos: () => invoke<EntrenadorProyecto[]>("entrenador_proyectos"),
   entrenadorCrear: (nombre: string, clase: string, modeloBase: string) =>

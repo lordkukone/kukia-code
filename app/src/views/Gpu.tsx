@@ -1,10 +1,28 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type GpuStat } from "../lib/api";
+import {
+  api,
+  type GgufDisponible,
+  type GpuStat,
+  type LocalGpuCfg,
+  type LocalGpuEstado,
+  type RpcSonda,
+} from "../lib/api";
+
+const PERFILES = [
+  { id: "solo_i9", nombre: "2 GPUs · solo el i9" },
+  { id: "tres_gpus", nombre: "3 GPUs · i9 + i7 por RPC" },
+];
 
 export default function Gpu({ notify }: { notify: (m: string) => void }) {
   const [stats, setStats] = useState<GpuStat[]>([]);
   const [history, setHistory] = useState<Record<number, number[]>>({});
   const timer = useRef<number | null>(null);
+
+  const [lg, setLg] = useState<LocalGpuCfg | null>(null);
+  const [est, setEst] = useState<LocalGpuEstado | null>(null);
+  const [ggufs, setGgufs] = useState<GgufDisponible[]>([]);
+  const [sonda, setSonda] = useState<RpcSonda | null>(null);
+  const [faena, setFaena] = useState("");
 
   useEffect(() => {
     const poll = async () => {
@@ -22,6 +40,11 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
       } catch (e) {
         notify(`GPU no disponible: ${e}`);
       }
+      try {
+        setEst(await api.localgpuStatus());
+      } catch {
+        /* se reintenta en el siguiente ciclo */
+      }
     };
     poll();
     timer.current = window.setInterval(poll, 2000);
@@ -31,12 +54,43 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    api.localgpuConfig().then(setLg).catch((e) => notify(`Motor local: ${e}`));
+    api.localgpuGgufs().then(setGgufs).catch(() => setGgufs([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const accion = async (
+    nombre: string,
+    fn: () => Promise<LocalGpuEstado>,
+    exito?: string
+  ) => {
+    setFaena(nombre);
+    try {
+      setEst(await fn());
+      if (exito) notify(exito);
+    } catch (e) {
+      notify(`${nombre}: ${e}`);
+    } finally {
+      setFaena("");
+    }
+  };
+
+  const guardar = async () => {
+    if (!lg) return;
+    try {
+      setLg(await api.localgpuSet(lg));
+      notify("Motor local guardado");
+    } catch (e) {
+      notify(`Guardar: ${e}`);
+    }
+  };
+
   const spark = (values: number[]) => {
     const w = 220;
     const h = 40;
-    const max = 100;
     const pts = values
-      .map((v, i) => `${(i / Math.max(values.length - 1, 1)) * w},${h - (v / max) * h}`)
+      .map((v, i) => `${(i / Math.max(values.length - 1, 1)) * w},${h - (v / 100) * h}`)
       .join(" ");
     return (
       <svg width={w} height={h} className="spark">
@@ -44,6 +98,8 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
       </svg>
     );
   };
+
+  const corriendo = est?.corriendo ?? false;
 
   return (
     <div className="page">
@@ -69,7 +125,6 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
                 {g.utilization.toFixed(0)}%
               </span>
             </div>
-
             <div className="meter">
               <div className="meter-label">
                 <span>VRAM</span>
@@ -84,7 +139,6 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
                 />
               </div>
             </div>
-
             <div className="meter">
               <div className="meter-label">
                 <span>Utilización</span>
@@ -94,7 +148,6 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
                 <div className="bar-fill green" style={{ width: `${g.utilization}%` }} />
               </div>
             </div>
-
             <div className="gpu-metrics">
               <div>
                 <span className="muted">Temp</span>
@@ -113,18 +166,107 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
                 <strong>{g.clock_memory_mhz} MHz</strong>
               </div>
             </div>
-
             <div className="spark-wrap">{spark(history[g.index] ?? [])}</div>
           </div>
         ))}
       </div>
-
       <div className="card">
-        <h2>Reparto multi-GPU (perfil)</h2>
+        <div className="gpu-head">
+          <h2>Motor local · llama.cpp</h2>
+          <span className={`chip ${corriendo ? "ok" : "subtle"}`}>
+            {corriendo ? `corriendo · pid ${est?.pid}` : "parado"}
+          </span>
+        </div>
         <p className="muted">
-          El reparto se guarda en Configuración. Los motores aplican sólo los métodos que soportan
-          (Ollama usa offload por capas; LM Studio gestiona su propia VRAM).
+          KUKIA arranca y para su propio llama-server. Con el perfil de 3 GPUs también lanza el RPC
+          del i7; si no responde a tiempo, arranca en 2 GPUs y lo dice.
         </p>
+        {lg && (
+          <div className="gpu-metrics" style={{ flexWrap: "wrap", gap: 12 }}>
+            <label>
+              <span className="muted">Perfil</span>
+              <select value={lg.perfil} onChange={(e) => setLg({ ...lg, perfil: e.target.value })}>
+                {PERFILES.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.nombre}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="muted">Modelo</span>
+              <select value={lg.modelo} onChange={(e) => setLg({ ...lg, modelo: e.target.value })}>
+                {!ggufs.some((g) => g.path === lg.modelo) && (
+                  <option value={lg.modelo}>{lg.modelo || "(sin modelo)"}</option>
+                )}
+                {ggufs.map((g) => (
+                  <option key={g.path} value={g.path}>
+                    {g.nombre} · {g.size_gb.toFixed(1)} GB
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="muted">Contexto</span>
+              <input
+                type="number"
+                min={512}
+                step={512}
+                value={lg.ctx}
+                onChange={(e) => setLg({ ...lg, ctx: Number(e.target.value) })}
+                style={{ width: 90 }}
+              />
+            </label>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+          <button
+            className="btn"
+            disabled={!!faena || corriendo}
+            onClick={() => accion("Arrancar", api.localgpuStart, "Motor local arrancado")}
+          >
+            {faena === "Arrancar" ? "Arrancando…" : "Arrancar"}
+          </button>
+          <button
+            className="btn"
+            disabled={!!faena || !corriendo}
+            onClick={() => accion("Parar", api.localgpuStop, "Motor local parado")}
+          >
+            Parar
+          </button>
+          <button
+            className="btn"
+            disabled={!!faena}
+            onClick={async () => {
+              try {
+                setSonda(await api.localgpuProbeRpc());
+              } catch (e) {
+                notify(`Sonda: ${e}`);
+              }
+            }}
+          >
+            Probar i7
+          </button>
+          <button className="btn" disabled={!!faena || !lg || corriendo} onClick={guardar}>
+            Guardar
+          </button>
+        </div>
+        {sonda && (
+          <p className="muted">
+            i7 {sonda.destino}: {sonda.ok ? "responde" : "no responde"} en {sonda.ms} ms —{" "}
+            {sonda.detalle}
+          </p>
+        )}
+        {est?.aviso && <p className="muted">Aviso: {est.aviso}</p>}
+        {est?.error && <p className="muted">Error: {est.error}</p>}
+        {est && est.lineas.length > 0 && (
+          <pre
+            className="card"
+            style={{ maxHeight: 220, overflow: "auto", fontSize: 11, whiteSpace: "pre-wrap" }}
+          >
+            {est.lineas.slice(-40).join("\n")}
+          </pre>
+        )}
       </div>
     </div>
   );
