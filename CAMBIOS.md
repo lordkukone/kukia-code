@@ -89,3 +89,19 @@ Resultados medidos:
 
 **Conclusion: las 3 GPUs no estan verificadas.** Falta arrancar `ggml-rpc-server.exe` en el i7
 (`H:\llama\ggml-rpc-server.exe -H 0.0.0.0 -p 50052`) con el firewall abierto en 50052.
+
+## Tokens/s y contexto maximo con Flint 40B (04/11/2026, 2 GPUs del i9)
+
+Medido con un solo llama-server, sin `-ngl` (ajuste automatico) y sin LM Studio compitiendo:
+
+| Contexto | Gen (prompt corto) | Gen (prompt 4,7k) | Prefill (4,7k) |
+|---|---|---|---|
+| 32.768 | 99,3 tok/s | 98,3 tok/s | 2.230 tok/s |
+| **65.536** | **100,7 tok/s** | **96,5 tok/s** | **2.377 tok/s** |
+| 131.072 | 69,8 tok/s | 72,4 tok/s | 899 tok/s |
+
+- 65.536 es el punto dulce: todo el modelo y el KV caben en las dos GPUs y no baja la velocidad.
+- 131.072 tambien arranca y funciona, pero pierde ~30% porque parte de las capas caen a CPU
+  (GPU1 a 14.363 de 16.311 MB, GPU0 a 11.506 de 12.227 MB).
+- Config de la app: `local_gpu.ctx = 65536`.
+- Con la 2070 del i7 por RPC habria ~8 GB mas y el 131k deberia caber entero, pero el RPC sigue apagado.
