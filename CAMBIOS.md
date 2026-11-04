@@ -70,3 +70,22 @@ Hallazgos:
 - El puerto 8080 esta ocupado por `nvpair-proxy.exe` (PAIR de NVIDIA): la config pasa a **8090**.
 - El ajuste automatico de memoria de b12110 aborta si se fuerza `-ngl 99` sin sitio: no pasar `-ngl`.
 - Un `dir_tree` de raiz supero el contexto (7364 > 4096 tokens): por eso el recorte a 3000 caracteres.
+
+## Verificacion de 3 GPUs (04/11/2026)
+
+| Archivo | Cambio | SHA-256 |
+|---|---|---|
+| `core/examples/localgpu_rpc_check.rs` | creado: sonda real + decision de perfil | `fa03739712d42066267b51061c9d65240d806c6d2ad15a656836580f5d2cab56` |
+
+Resultados medidos:
+
+- i7 `192.168.50.2`: responde a ping, WinRM 5985 abierto, **RPC 50052 cerrado** (expira a los 10 s).
+- Sonda de KUKIA: `ok=false`, 10.002 ms, decision `SoloI9` con motivo
+  «el rpc-server del i7 no responde: se cae a las 2 GPUs del i9». Criterio de <=10 s: **CUMPLE**.
+- Arranque forzado de 3 GPUs (sin pasar por la sonda): llama-server recibe
+  `--tensor-split 35,40,25 --rpc 192.168.50.2:50052`, falla con
+  `Failed to connect to 192.168.50.2:50052` y muere (codigo -1073740791) a los 24,6 s.
+  Confirma que el guardia de la app (sondear antes) es imprescindible: sin el, no hay fallback.
+
+**Conclusion: las 3 GPUs no estan verificadas.** Falta arrancar `ggml-rpc-server.exe` en el i7
+(`H:\llama\ggml-rpc-server.exe -H 0.0.0.0 -p 50052`) con el firewall abierto en 50052.

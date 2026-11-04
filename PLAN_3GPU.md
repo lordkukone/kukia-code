@@ -159,3 +159,9 @@ si no, arranca en 2 GPUs con aviso y el chat sigue funcionando.
   (192.168.50.2:50052 cerrado). Todo lo medido es con las 2 GPUs del i9.
 - Con herramientas activas el camino OpenAI ya ejecuta `tool_calls`; antes las ignoraba.
 - Pendiente: recompilar el binario de release con estos cambios y probar el chat desde la UI.
+
+## 14. Verificacion de las 3 GPUs (04/11/2026)
+
+Verificado: sonda al i7 en 10,002 s con decision `SoloI9` y motivo; arranque forzado con `--rpc`
+falla y muere, por lo que el sondeo previo es lo que evita un fallo duro.
+No verificado: inferencia real con 3 GPUs, porque el RPC del i7 sigue apagado.
