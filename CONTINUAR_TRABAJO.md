@@ -1,6 +1,6 @@
 # KUKIA CODE — CÓMO CONTINUAR
 
-**Actualizado:** 01/11/2026 · **Autor:** Xoxete
+**Actualizado:** 01/11/2026 · **Autor:** Xoxete · **revisado 04/11/2026** (ver §0.1)
 Lee esto antes de tocar nada. Está escrito para que otra sesión (u otra IA) no rompa lo que ya funciona.
 
 ## 0. Reglas que no se negocian
@@ -10,6 +10,26 @@ Lee esto antes de tocar nada. Está escrito para que otra sesión (u otra IA) no
 3. No borrar modelos, ni tocar KUKIA Network, ni CUDA/drivers, ni Pinokio, ni OpenCode, ni Ollama.
 4. Nada se declara terminado sin prueba ejecutada y con su salida pegada.
 5. `tmp_capturas/`, `logs/`, `output/`, `tmp_seed_test/` **no** se commitean.
+6. **OpenCode no se toca.** Su `auth.json` se lee en solo lectura para la cascada de claves; no se
+   modifica, no se reinstala y no se le cambia la configuración. Lo mismo con Ollama y LM Studio.
+
+## 0.1 Estado verificado el 04/11/2026 (leer antes de tocar nada)
+
+Auditoría de solo lectura sobre el equipo real. El detalle completo está en `PROGRESO_GENERAL.md`
+(§ «Verificación independiente»); aquí va solo lo accionable.
+
+| # | Hallazgo | Qué hacer |
+|---|---|---|
+| V1 | El exe instalado es del **02/11 21:30**, 12.371.456 B, SHA-256 `a90a7d89…fdb4f5`, y **declara 0.1.0** igual que la release del 01/11 (que pesaba 9.812.992 B) | Poner número de build visible (o subir a 0.2.0) y añadir el hash del exe interno a `SHA256SUMS` |
+| V2 | `default_model` = `kukia-gemma4-q5` (19,13 GB) con `gpu_split [30,70]` → **carga rechazada**: 20,21 GB en 15,45 GB libres | **Hecho 04/11**: `gpu_split = [50, 50]` (backup en `backups/config_2026-11-04/`). Carga en **52 s**, repartido 11.413 + 10.687 MiB |
+| V7 | `vram::fits()` parece comparar el modelo **entero** contra una sola GPU, no contra el reparto | **Sin verificar en código**: comprobar si el cálculo debe ser por tarjeta |
+| V3 | La app **no está rota**: 26 arranques, último 04/11 11:32, 0 errores, `integrity_check ok`, 817 memorias | Nada; usar V1/V2 como causa del síntoma «solo va el chat» |
+| V4 | `secrets.json` sigue en claro (21 B) | **C0**, sin novedad: sigue siendo lo primero |
+| V5 | El worker **vuelve a estar cableado**: `DESKTOP-6CK4U6H` = `192.168.50.2`, < 1 ms, RDP+WinRM abiertos | **M0-B**: inventario de solo lectura (necesita credenciales). No tiene Ollama, LM Studio ni `kukia-worker.exe` (11434/1234/1235/8791 cerrados) |
+| V6 | Este documento y `PROGRESO_GENERAL.md` decían que no había tool calling ni MCP; el build del 03/11 los tiene | Corregido en `PROGRESO_GENERAL.md`; falta revisar D3 y D11 de `MATRIZ_FUNCIONALIDADES.md` |
+
+**No hacer sin autorización:** reinstalar o reconfigurar OpenCode, tocar `auth.json`, borrar
+`%APPDATA%\KukiaCode`, abrir puertos en el router, ni instalar nada en el worker.
 
 ## 1. Comandos que funcionan (Windows, Git Bash)
 

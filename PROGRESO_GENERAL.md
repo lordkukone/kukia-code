@@ -1,6 +1,6 @@
 # KUKIA CODE — PROGRESO GENERAL
 
-**Última actualización:** 01/11/2026 · **Autor:** Xoxete
+**Última actualización:** 01/11/2026 · **Autor:** Xoxete · **revisado 04/11/2026** (verificación independiente, § final)
 
 ## Identidad del proyecto
 
@@ -50,13 +50,13 @@
 
 ## Lo que NO está
 
-- Tool calling en ningún proveedor (bloquea agentes cloud).
+- ~~Tool calling en ningún proveedor~~ → **corregido 04/11/2026: el tool calling existe desde el 03/11** (35 herramientas, bucle verificado).
 - Almacenamiento seguro de claves (hoy `secrets.json` en claro, sin DPAPI).
 - Coste/presupuesto de nube, router automático local+cloud, kill switch de nube.
-- Multi-PC real (solo diseño en `INFORMES/ARQUITECTURA_MULTI_PC.md`).
+- Multi-PC real: el diseño existe (`INFORMES/ARQUITECTURA_MULTI_PC.md`), el worker **no**. El segundo PC ya está cableado y accesible (§ verificación).
 - Updater firmado, firma de código, notificaciones del sistema.
 - Memoria semántica con embeddings (la búsqueda es `LIKE`).
-- Terminal pty real, MCP, editor con resaltado.
+- Terminal pty real y editor con resaltado. ~~MCP~~ → **corregido 04/11/2026: el cliente MCP (stdio y http) existe desde el 03/11**.
 
 ## Mapa de documentos
 
@@ -68,3 +68,96 @@
 | Historial de cambios | `CHANGELOG.md` |
 | Plan de release | `PLAN_RELEASE.md` |
 | Arquitectura y seguridad | `docs/ARQUITECTURA.md`, `docs/SEGURIDAD.md` |
+
+## Verificación independiente — 04/11/2026
+
+Auditoría de solo lectura sobre el equipo real, no sobre estos informes. **No se tocó OpenCode**
+(su `auth.json` solo se leyó, como siempre), ni Ollama, ni LM Studio, ni `I:\CEREBRO`, ni ningún driver.
+
+### El binario instalado no es el de la release del 01/11
+
+| Dato | Valor |
+|---|---|
+| Ruta | `C:\Program Files\KUKIA CODE\kukia-code.exe` |
+| Tamaño | **12.371.456 B** |
+| Instalado | 01/11/2026 18:01 · **modificado 02/11/2026 21:30** |
+| Versión declarada | **0.1.0** (la misma que la release del 01/11) |
+| SHA-256 | `a90a7d89f9efc54f98626d3b44370930f52a1d3ef1f3ef3645aede52c8fdb4f5` |
+
+El exe documentado en `PLAN_RELEASE.md` pesaba 9.812.992 B. Este es 2,5 MB mayor, es del 02/11 a las
+21:30 y **contiene las herramientas**: dentro del binario aparecen `files_read`, `files_write`,
+`mcp_call`, `allow_shell`, `vram://competencia` y `LoRA`. **No es** la build «solo chat» del 01/11.
+
+**El problema de fondo:** tres binarios distintos declaran los tres `0.1.0`, y los `SHA256SUMS` de las
+releases solo cubren los instaladores. Mirando la interfaz es imposible saber qué build está instalado.
+
+### Por qué el modelo por defecto no arranca
+
+`config.json` tiene `default_model = kukia-gemma4-q5:latest` (19,13 GB) y `gpu_split = [30, 70]`.
+Log del 03/11 a las 08:39:
+
+```
+[warn] carga rechazada ollama/kukia-gemma4-q5:latest: archivo 17.82 GB + 12 % + KV(4096) ≈ 20.21 GB · GPU1 (RTX 5060 Ti): 15.45 GB libres → NO cabe
+```
+
+Con `[30, 70]` el 70 % se manda a la 5060 Ti (16 GB) y la 5070 (12 GB) queda casi ociosa. **Arreglo
+pendiente:** `[50, 50]` (o `[45, 55]`) para usar los 27,9 GB reales, o un modelo que quepa en una sola
+tarjeta. `GET 127.0.0.1:11434/api/ps` devuelve vacío: ahora mismo no hay ningún modelo cargado.
+
+### La app está sana (esto descarta un fallo de instalación)
+
+- `logs\kukia.log`: **26 arranques**, el último **04/11/2026 11:32**, con «catálogo universal: 125
+  modelos» y liberaciones de VRAM correctas. **Cero errores.**
+- `kukia.db`: `integrity_check ok` · **9 políticas** · 7 sesiones · 237 mensajes · **817 memorias** ·
+  2 filas de `audit`.
+- `entrenador\` con dos datasets del 03/11 (13:46 y 13:48): el entrenador de LoRA ya se usó en ese build.
+- `secrets.json` = **21 B** (vacío) y en claro: **C0 sigue abierta**. La clave cloud no sale de ahí
+  (`has_cloud_key: true` viene de la cascada entorno → `auth.json` de OpenCode, leído sin modificarlo).
+
+### Red: el segundo PC vuelve a estar cableado
+
+| Dato | Valor |
+|---|---|
+| Master (este PC) | `KUKIPCWIN11` · Ethernet **192.168.50.1** · Wi-Fi 192.168.1.11 · Tailscale 100.116.82.33 |
+| Worker | **DESKTOP-6CK4U6H** · **192.168.50.2** · MAC `D8-BB-C1-97-28-FB` (Micro-Star / MSI) |
+| Enlace | cable directo PC-a-PC, **< 1 ms**, 0 % de pérdida |
+| Puertos abiertos | 135, 139, 445, **3389 (RDP)**, **5985 (WinRM)** |
+| Puertos cerrados | **11434** (Ollama), **1234/1235** (LM Studio), **8791** (worker KUKIA) |
+
+La subred `192.168.50.0/24` son rutas «En vínculo» por el adaptador Ethernet: no pasa por el router. El
+worker **no está en Tailscale**. Está encendido y accesible, pero **sin motores de IA y sin
+`kukia-worker.exe`**: lo siguiente es **M0-B** (inventario de solo lectura), que necesita credenciales por
+WinRM o RDP. **La identidad i7-12700 + RTX 2070 Super no está confirmada:** lo único verificado es una
+placa MSI con Windows.
+
+### Hardware del master (medido, no supuesto)
+
+i9-10900K (10C/20T) · 64 GB (2×32 GB @ 3600 MT/s) · ROG MAXIMUS XII APEX · **RTX 5070 12.227 MiB** +
+**RTX 5060 Ti 16.311 MiB** (driver 621.01) = **27,9 GB de VRAM** · Windows 11 Pro build 26300 ·
+`C:` 94,6 GB libres · `H:` 91,6 GB libres.
+
+> Trampa medida: WMI (`Win32_VideoController`) informa «4,0 GB» por GPU por desbordamiento de
+> `AdapterRAM`. Los números válidos son los de `nvidia-smi`.
+
+### Repositorio
+
+`github.com/lordkukone/kukia-code` es público · rama `master` · último commit **`eeccf72`** (03/11/2026
+13:53) · tag `prueba-20261103c`. `core/src/catalog.rs` (1.136 líneas) y `core/src/serve.rs` (488) **ya
+están versionados**: el incidente del 03/11 no puede repetirse.
+
+### Resultado medido de la carga — 04/11/2026 13:18
+
+Con `gpu_split = [50, 50]` el modelo **sí carga**, y no en una tarjeta: se reparte entre las dos.
+
+| Medición | Valor |
+|---|---|
+| Tiempo de carga | **52 s** |
+| `size` / `size_vram` | 19.649.601.205 B (**18,3 GiB**) — 100 % en VRAM |
+| Reparto real (`nvidia-smi`) | RTX 5070 **11.413 MiB** + RTX 5060 Ti **10.687 MiB** |
+| Respuesta | `200` · devuelve `OK` con `done_reason: stop` |
+| Tras descargarlo | 5070 2.728 MiB · 5060 Ti 226 MiB (como estaba) |
+
+**Hipótesis abierta (no verificada en el código):** el aviso del 03/11 comparaba los 20,21 GB contra
+**una sola** GPU (GPU1, 15,45 GB libres), como si el modelo entero tuviera que caber en una tarjeta en
+vez de repartirse según `gpu_split`. Con `[50, 50]` el reparto real es 11,4 + 10,7 GB y entra.
+Conviene revisar `vram::fits()` para confirmar si el cálculo es por tarjeta o por modelo completo.
