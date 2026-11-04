@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
+import {  type DispositivoMotor,
   api,
   type GgufDisponible,
   type GpuStat,
@@ -23,6 +23,7 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
   const [ggufs, setGgufs] = useState<GgufDisponible[]>([]);
   const [sonda, setSonda] = useState<RpcSonda | null>(null);
   const [rpcVivo, setRpcVivo] = useState<boolean | null>(null);
+  const [devs, setDevs] = useState<DispositivoMotor[]>([]);
   const [faena, setFaena] = useState("");
 
   useEffect(() => {
@@ -59,10 +60,15 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
     api.localgpuConfig().then(setLg).catch((e) => notify(`Motor local: ${e}`));
     api.localgpuGgufs().then(setGgufs).catch(() => setGgufs([]));
     // Vigila el i7 para poder sumar la tercera GPU sin reiniciar KUKIA.
+    // Los dispositivos traen tambien la tarjeta del i7 por RPC, que no existe
+    // en esta maquina y por eso no sale en `gpuStats`.
     const mirarI7 = () =>
       api
-        .localgpuProbeRpc()
-        .then((r) => setRpcVivo(r.ok))
+        .localgpuDispositivos()
+        .then((d) => {
+          setDevs(d);
+          setRpcVivo(d.some((x) => x.remoto && x.disponible));
+        })
         .catch(() => setRpcVivo(false));
     mirarI7();
     const vigilante = window.setInterval(mirarI7, 10000);
@@ -115,6 +121,7 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
     <div className="page">
       <div className="page-head">
         <h1>GPU Performance Center</h1>
+        <span className="chip subtle">{devs.length} dispositivos</span>
         <span className="chip subtle">refresco 2 s</span>
       </div>
 
@@ -179,6 +186,23 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
             <div className="spark-wrap">{spark(history[g.index] ?? [])}</div>
           </div>
         ))}
+        {devs
+          .filter((d) => d.remoto)
+          .map((d) => (
+            <div key={d.nombre} className="card gpu-card">
+              <div className="gpu-head">
+                <h3>{d.nombre}</h3>
+                <span className={`chip ${d.disponible ? "ok" : "subtle"}`}>
+                  {d.disponible ? "RPC listo" : "sin respuesta"}
+                </span>
+              </div>
+              <p className="muted">{d.detalle}</p>
+              <div className="meter-label">
+                <span>VRAM declarada</span>
+                <span>{(d.vram_mb / 1024).toFixed(0)} GB</span>
+              </div>
+            </div>
+          ))}
       </div>
       <div className="card">
         <div className="gpu-head">

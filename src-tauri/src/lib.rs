@@ -2796,6 +2796,12 @@ fn localgpu_set(cfg: localgpu::LocalGpuCfg) -> Result<localgpu::LocalGpuCfg, Str
 fn localgpu_status() -> localgpu::EstadoProceso {
     localgpu::proceso::status()
 }
+/// Tarjetas que KUKIA usaria: las del equipo y una por equipo remoto por RPC.
+#[tauri::command]
+fn localgpu_dispositivos() -> Vec<localgpu::DispositivoMotor> {
+    localgpu::dispositivos()
+}
+
 
 #[tauri::command]
 fn localgpu_stop() -> Result<localgpu::EstadoProceso, String> {
@@ -2980,6 +2986,7 @@ pub fn run() {
             localgpu_config,
             localgpu_set,
             localgpu_status,
+            localgpu_dispositivos,
             localgpu_start,
             localgpu_stop,
             localgpu_probe_rpc,

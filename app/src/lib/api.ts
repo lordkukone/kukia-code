@@ -911,6 +911,14 @@ export interface EntrenadorCfg {
 /* ============ Motor local llama.cpp ============ */
 
 /** Configuracion del motor local (campo `local_gpu` de AppConfig). */
+export interface DispositivoMotor {
+  nombre: string;
+  detalle: string;
+  vram_mb: number;
+  remoto: boolean;
+  disponible: boolean;
+}
+
 export interface LocalGpuCfg {
   llama_server: string;
   rpc_server: string;
@@ -975,6 +983,7 @@ export const api = {
   localgpuStart: () => invoke<LocalGpuEstado>("localgpu_start"),
   localgpuStop: () => invoke<LocalGpuEstado>("localgpu_stop"),
   localgpuProbeRpc: () => invoke<RpcSonda>("localgpu_probe_rpc"),
+  localgpuDispositivos: () => invoke<DispositivoMotor[]>("localgpu_dispositivos"),
   localgpuGgufs: () => invoke<GgufDisponible[]>("localgpu_ggufs", { max: 200 }),
 
   entrenadorProyectos: () => invoke<EntrenadorProyecto[]>("entrenador_proyectos"),

@@ -100,12 +100,12 @@ pub fn arrancar(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<EstadoProceso, Stri
     // Se miden las GPUs de verdad y se sondean los equipos remotos: entra en el
     // reparto todo lo que haya, sean dos, tres o mas.
     let locales = crate::localgpu::gpus::detectar().unwrap_or_default();
-    let mut remotos: Vec<String> = Vec::new();
+    let mut remotos: Vec<(String, u64)> = Vec::new();
     if perfil == Perfil::TresGpus {
-        for h in cfg.hosts() {
+        for (h, mb) in cfg.remotos() {
             let s = crate::localgpu::rpc::sondar(&h, cfg.timeout_rpc_s);
             if s.ok {
-                remotos.push(s.destino.clone());
+                remotos.push((s.destino.clone(), mb));
             }
         }
     }
@@ -116,12 +116,15 @@ pub fn arrancar(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<EstadoProceso, Stri
             (g.nombre.clone(), vram)
         })
         .collect();
-    for r in &remotos {
-        disp.push((r.clone(), cfg.rpc_vram_mb));
+    for (destino, mb) in &remotos {
+        disp.push((destino.clone(), *mb));
     }
     let split: Vec<u32> = if disp.len() <= 1 {
         Vec::new()
-    } else if cfg.tensor_split.len() == disp.len() && cfg.tensor_split.iter().any(|x| *x > 0) {
+    } else if cfg.forzar_split
+        && cfg.tensor_split.len() == disp.len()
+        && cfg.tensor_split.iter().any(|x| *x > 0)
+    {
         cfg.tensor_split.clone()
     } else {
         crate::localgpu::gpus::reparto(&disp, cfg.reserva_vram_mb)
@@ -130,7 +133,8 @@ pub fn arrancar(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<EstadoProceso, Stri
     if exe.is_empty() {
         return Err("falta la ruta de llama-server.exe (local_gpu.llama_server)".into());
     }
-    let args = flags::argumentos_con(cfg, perfil, &split, &remotos)?;
+    let destinos: Vec<String> = remotos.iter().map(|(d, _)| d.clone()).collect();
+    let args = flags::argumentos_con(cfg, perfil, &split, &destinos)?;
     if !std::path::Path::new(&exe).exists() {
         return Err(format!(
             "no encuentro llama-server en «{exe}»: pon la ruta real en local_gpu.llama_server"

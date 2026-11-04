@@ -106,9 +106,9 @@ pub fn argumentos_con(
 pub fn argumentos(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<Vec<String>, String> {
     let split = tensor_split(cfg, perfil);
     let remotos: Vec<String> = if perfil == Perfil::TresGpus {
-        cfg.hosts()
+        cfg.remotos()
             .into_iter()
-            .map(|h| crate::localgpu::rpc::normalizar(&h))
+            .map(|(h, _)| crate::localgpu::rpc::normalizar(&h))
             .collect()
     } else {
         Vec::new()

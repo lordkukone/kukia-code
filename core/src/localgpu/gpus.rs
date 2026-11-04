@@ -145,3 +145,55 @@ mod tests {
         assert_eq!(r.len(), 2);
     }
 }
+
+/// Separa una entrada de `rpc_hosts` en destino y VRAM: `host`, `host:puerto` o
+/// `host:puerto=MB`. Sin `=MB` se usa la VRAM por defecto de la configuracion.
+/// Asi, al cambiar una tarjeta por otra mas grande, basta con anotar su tamano.
+pub fn parsear_equipo(entrada: &str, vram_defecto: u64) -> (String, u64) {
+    let t = entrada.trim();
+    if let Some((host, mb)) = t.rsplit_once('=') {
+        if let Ok(v) = mb.trim().parse::<u64>() {
+            if v > 0 && !host.trim().is_empty() {
+                return (host.trim().to_string(), v);
+            }
+        }
+    }
+    (t.to_string(), vram_defecto)
+}
+
+#[cfg(test)]
+mod tests_equipos {
+    use super::*;
+
+    #[test]
+    fn entrada_con_vram_propia() {
+        let (h, mb) = parsear_equipo(" 192.168.50.2:50052=22528 ", 8192);
+        assert_eq!(h, "192.168.50.2:50052");
+        assert_eq!(mb, 22528);
+    }
+
+    #[test]
+    fn entrada_sin_vram_usa_la_de_la_config() {
+        assert_eq!(parsear_equipo("192.168.50.2", 8192), ("192.168.50.2".into(), 8192));
+        assert_eq!(parsear_equipo("192.168.50.3:50052", 12288).1, 12288);
+    }
+
+    #[test]
+    fn una_vram_absurda_no_rompe_la_entrada() {
+        assert_eq!(parsear_equipo("host=0", 8192), ("host=0".into(), 8192));
+        assert_eq!(parsear_equipo("=22528", 8192), ("=22528".into(), 8192));
+    }
+
+    #[test]
+    fn reparto_con_una_tarjeta_de_22_gb() {
+        // VRAM total declarada; la reserva de 700 MB la descuenta `reparto`.
+        let d = vec![
+            ("5070".to_string(), 12227u64),
+            ("5060 Ti".to_string(), 16311),
+            ("futura 22 GB".to_string(), 22528),
+        ];
+        let r = reparto(&d, 700);
+        assert_eq!(r.iter().sum::<u32>(), 100);
+        assert_eq!(r, vec![24, 32, 44]);
+    }
+}

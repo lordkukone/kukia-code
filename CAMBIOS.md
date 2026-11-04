@@ -221,3 +221,39 @@ utiles); la config trae 35,40,25 y, al coincidir en numero, se respeta.
 Prueba real por el codigo de KUKIA: `dispositivos: 2 locales + 1 por RPC = 3`, modelo cargado en 49,5 s,
 escuchando en 8099, parada limpia y cero procesos huerfanos. `cargo test -p kukia-core --lib`: **231 pasan,
 0 fallan, 2 ignorados**; `cargo check --workspace --all-targets` EXIT 0; `npm run build` EXIT 0.
+
+## La vista de GPU ensena tambien la tarjeta remota (04/11/2026)
+
+| Archivo | Cambio | SHA-256 |
+|---|---|---|
+| `core/src/localgpu/mod.rs` | `DispositivoMotor` + `dispositivos()`: GPUs locales y una por equipo RPC | `cd16bc69b71e09844b86e8c4844e2d537465828e7c23fa0b315b85ecaba782be` |
+| `src-tauri/src/lib.rs` | comando `localgpu_dispositivos` | `df132c19aa5931ed85e4fc3b90411c82f8c228e5c4b43e5e19990ef23ab171a0` |
+| `app/src/views/Gpu.tsx` | tarjeta de la GPU remota y contador de dispositivos | `5b6e6e3984673afc316b50c7871a1e86552f8e7e5b4e78856783c42eccaeb385` |
+| `app/src/lib/api.ts` | tipo `DispositivoMotor` e invocacion nueva | `e713e9766ddc2d187b878a06b457fde5f7f7fc725c05b82fe1820ac360a259ba` |
+
+Por que solo salian 2: la rejilla de la vista se llenaba con `gpu_stats`, que lee `nvidia-smi` del
+equipo. La tarjeta del i7 no existe en este PC, asi que nunca aparecia ahi aunque el motor la usara.
+Ahora la vista pide `localgpu_dispositivos` cada 10 s y pinta ademas la remota con su estado RPC y su
+VRAM declarada; el contador de cabecera dice cuantas hay en total.
+
+## Preparado para cambiar la de 8 GB por una de 22 GB
+
+| Archivo | Cambio | SHA-256 |
+|---|---|---|
+| `core/src/localgpu/gpus.rs` | `parsear_equipo`: `host:puerto=MB` para declarar la VRAM de cada equipo | `d22b3f542d8819b15dbea12295f662ef85beff1f8570a914caae6b4218f6ed4c` |
+| `core/src/localgpu/proceso.rs` | el reparto se calcula siempre con la VRAM real de cada dispositivo | `4c1d015e91d1d7c9a2fe27302dde797abfb1e703f619b84f0a8f8db552119004` |
+| `core/src/localgpu/flags.rs` | los `--rpc` salen de `remotos()`, ya sin el `=MB` pegado al destino | `18f621f33bc93c1e267d6a98e16ffaf900a25dd926af37641542c5506a7141c6` |
+
+El unico dato que hay que cambiar el dia del cambio es la VRAM del equipo remoto:
+
+```json
+"rpc_hosts": ["192.168.50.2:50052=22528"]
+```
+
+Con eso el reparto pasa solo a **24,32,44** (comprobado en test con 12.227 / 16.311 / 22.528 MB).
+Antes, el `tensor_split` de la config mandaba siempre que coincidiera en numero de valores; ahora solo
+manda si `forzar_split` es `true`, para que cambiar una tarjeta no obligue a recalcular a mano.
+
+Comprobado: `cargo test -p kukia-core --lib` **235 pasan, 0 fallan, 2 ignorados** (9 tests nuevos entre
+reparto de 5 dispositivos, tarjeta de 22 GB, parseo de `=MB` y reparto calculado); `cargo check
+--workspace --all-targets` EXIT 0; `npm run build` EXIT 0.

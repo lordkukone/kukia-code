@@ -76,6 +76,8 @@ pub struct LocalGpuCfg {
     pub rpc_hosts: Vec<String>,
     /// VRAM declarada de cada equipo remoto (no se puede leer por red).
     pub rpc_vram_mb: u64,
+    /// Si es true, manda `tensor_split` de la config; si no, se calcula con la VRAM real.
+    pub forzar_split: bool,
     /// Margen que se deja libre en cada tarjeta al repartir.
     pub reserva_vram_mb: u64,
     pub vram_i7_gb: f64,
@@ -99,6 +101,7 @@ impl Default for LocalGpuCfg {
             rpc_host: "192.168.50.2:50052".into(),
             rpc_hosts: Vec::new(),
             rpc_vram_mb: 8192,
+            forzar_split: false,
             reserva_vram_mb: 700,
             vram_i7_gb: 8.0,
             rutas_gguf: Vec::new(),
@@ -115,7 +118,7 @@ impl LocalGpuCfg {
 
     /// Equipos remotos a sondear: la lista nueva y, si esta vacia, el host suelto
     /// de siempre. Asi una config vieja sigue sumando la GPU del i7.
-    pub fn hosts(&self) -> Vec<String> {
+    fn equipos_crudos(&self) -> Vec<String> {
         let mut v: Vec<String> = self
             .rpc_hosts
             .iter()
@@ -126,6 +129,21 @@ impl LocalGpuCfg {
             v.push(self.rpc_host.trim().to_string());
         }
         v
+    }
+
+    pub fn hosts(&self) -> Vec<String> {
+        self.equipos_crudos()
+            .into_iter()
+            .map(|h| crate::localgpu::gpus::parsear_equipo(&h, self.rpc_vram_mb).0)
+            .collect()
+    }
+
+    /// Equipos remotos con la VRAM que aporta cada uno, lista para el reparto.
+    pub fn remotos(&self) -> Vec<(String, u64)> {
+        self.equipos_crudos()
+            .into_iter()
+            .map(|h| crate::localgpu::gpus::parsear_equipo(&h, self.rpc_vram_mb))
+            .collect()
     }
 }
 
@@ -178,6 +196,52 @@ pub fn presupuesto_gb(locales: &[f64], i7_gb: f64, perfil: Perfil) -> f64 {
 /// Configuracion guardada del motor local.
 pub fn cfg() -> LocalGpuCfg {
     crate::config::load_config().local_gpu
+}
+
+/// Una tarjeta que KUKIA tendria en cuenta al arrancar el motor: cada GPU del
+/// equipo que lista `nvidia-smi` y una por equipo remoto que responda por RPC.
+/// La remota no puede decir su modelo ni su VRAM real: eso se declara.
+#[derive(Debug, Clone, Serialize)]
+pub struct DispositivoMotor {
+    pub nombre: String,
+    pub detalle: String,
+    pub vram_mb: u64,
+    pub remoto: bool,
+    pub disponible: bool,
+}
+
+/// Lo que la interfaz enseña como "graficas disponibles". Sondea los equipos
+/// remotos con un tope corto para no dejar la vista colgada.
+pub fn dispositivos() -> Vec<DispositivoMotor> {
+    let c = cfg();
+    let mut v: Vec<DispositivoMotor> = gpus::detectar()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|g| DispositivoMotor {
+            nombre: g.nombre.clone(),
+            detalle: format!("GPU {} del equipo", g.indice),
+            vram_mb: g.total_mb,
+            remoto: false,
+            disponible: true,
+        })
+        .collect();
+    if c.perfil() == Perfil::TresGpus {
+        for (host, mb) in c.remotos() {
+            let s = rpc::sondar(&host, c.timeout_rpc_s.min(3));
+            v.push(DispositivoMotor {
+                nombre: format!("Equipo remoto {host}"),
+                detalle: if s.ok {
+                    format!("RPC listo en {} ms · {} GB declarados", s.ms, mb / 1024)
+                } else {
+                    "sin respuesta: apagado o sin rpc-server".to_string()
+                },
+                vram_mb: mb,
+                remoto: true,
+                disponible: s.ok,
+            });
+        }
+    }
+    v
 }
 
 /// GGUF elegibles, con lo justo para que la interfaz los enseñe.
