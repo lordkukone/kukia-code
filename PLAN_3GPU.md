@@ -141,3 +141,14 @@ de aceptacion siguen sin verificar hasta descargar llama.cpp y poner su ruta en
   i9, cargo el modelo en 9,5 s, escucho en 127.0.0.1:8099 y se paro sin dejar hijos.
 - Pendiente: `ggml-rpc-server.exe` en el i7 (necesita arranque remoto o lanzarlo a mano),
   y la prueba de chat de punta a punta desde la interfaz.
+
+## 12. Encender el i7 a mano (sin credenciales de red)
+
+En esta version de llama.cpp el servidor RPC se llama `ggml-rpc-server.exe`. Para sumar la
+RTX 2070 del i7 (`192.168.50.2`), en esa maquina, en una consola:
+
+    H:\llama\ggml-rpc-server.exe -H 0.0.0.0 -p 50052
+
+Y en el firewall de ese equipo, dejar entrar TCP 50052 (ya autorizado por el usuario).
+En el i9 basta con pulsar "Probar i7" en la vista GPU: si responde, el perfil de 3 GPUs lo usa;
+si no, arranca en 2 GPUs con aviso y el chat sigue funcionando.
