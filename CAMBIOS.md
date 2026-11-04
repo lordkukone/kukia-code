@@ -49,3 +49,7 @@ Se anadieron solo las claves de `local_gpu`; el resto del JSON queda igual.
 Prueba real (04/11 16:07): llama.cpp b12110 CUDA 13.4 en `H:\llama`; modelo Qwen3.5-9B Q6_K.
 Modelo cargado en 9,5 s, escuchando en 127.0.0.1:8099, parada limpia (sin hijos vivos).
 Dato: en esta version el servidor RPC se llama `ggml-rpc-server.exe`, no `rpc-server.exe`.
+
+Correccion (04/11): la primera escritura fue a una copia de la carpeta de backups.
+La config viva (`%APPDATA%\KukiaCode\config\config.json`) se copio antes a
+`backups/3gpu_2026-11-04/config_viva_antes_fase2.json` y se parcheo despues.
