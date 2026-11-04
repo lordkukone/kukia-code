@@ -161,3 +161,36 @@ Con `gpu_split = [50, 50]` el modelo **sí carga**, y no en una tarjeta: se repa
 **una sola** GPU (GPU1, 15,45 GB libres), como si el modelo entero tuviera que caber en una tarjeta en
 vez de repartirse según `gpu_split`. Con `[50, 50]` el reparto real es 11,4 + 10,7 GB y entra.
 Conviene revisar `vram::fits()` para confirmar si el cálculo es por tarjeta o por modelo completo.
+
+### C0 cerrado — claves cifradas con DPAPI (04/11/2026)
+
+| Pieza | Estado |
+|---|---|
+| Cifrado | `CryptProtectData` por usuario, FFI directa a `crypt32` (**sin dependencias nuevas**) |
+| Formato | `secrets.json` pasa a `{"v":2,"dpapi":"<hex>"}` escrito de forma atómica |
+| Compatibilidad | sigue leyendo el JSON en claro antiguo, plano y con `providers` |
+| Migración | al arrancar (en `setup`): copia `secrets.json.legacy.bak` y reescribe cifrado; si la copia falla, no toca nada |
+| API | `core/src/secrets.rs`: `leer`, `buscar`, `guardar`, `borrar`, `migrar`, `esta_cifrado`, `pendiente_de_migrar` |
+
+Pruebas ejecutadas (binario release del 04/11 13:46, con `KUKIA_DATA_DIR` en carpeta temporal):
+
+```
+cargo test -p kukia-core --lib secrets    -> 7 pasan (incluye DPAPI real: cifrar y descifrar)
+cargo test -p kukia-core --lib buildinfo  -> 2 pasan
+cargo build --release -p kukia-code       -> EXIT 0 (3m 26s)
+app arrancada con secrets.json en claro   -> {"v": 2, "dpapi": "01000000d08c9ddf..."}
+   - lineas del archivo con la clave en claro: 0
+   - copia secrets.json.legacy.bak: creada
+   - log: "secrets.json migrado a DPAPI"
+```
+
+Lo que **no** esta: la vista CLOUD CREDENTIALS (alta, prueba de conexion, revocacion). El almacen
+cifra y la API existe, pero la pantalla sigue siendo el texto de Configuracion con el aviso de DPAPI.
+
+### Numero de build visible (04/11/2026)
+
+Antes la cabecera decia `v0.1.0 · Fase 3`, identico en el binario del 01/11, el del 02/11 y el del
+03/11: era imposible saber cual se estaba ejecutando. Ahora muestra
+`v0.1.0 · Fase 3 · build AAAA-MM-DD HH:MM`, leido del ejecutable en marcha por el comando `app_info`
+(`core/src/buildinfo.rs`). Es la fecha de modificacion del binario, no un numero de compilacion
+grabado (eso pediria `build.rs`), pero cambia con cada compilacion y cada instalacion y no miente.

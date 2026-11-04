@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   api,
   type AppConfig,
+  type AppInfo,
   type ModelInfo,
   type ProviderInfo,
   type SystemInfo,
@@ -75,6 +76,8 @@ const NAV: { id: ViewId; label: string; icon: string }[] = [
 export default function App() {
   const [view, setView] = useState<ViewId>("chat");
   const [system, setSystem] = useState<SystemInfo | null>(null);
+  // Ficha del binario: versión, fecha de build y estado de DPAPI.
+  const [info, setInfo] = useState<AppInfo | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -115,9 +118,10 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [sys, cfg] = await Promise.all([api.systemInfo(), api.config()]);
+        const [sys, cfg, ficha] = await Promise.all([api.systemInfo(), api.config(), api.appInfo()]);
         setSystem(sys);
         setConfig(cfg);
+        setInfo(ficha);
         setProvider(cfg.default_provider);
         setModel(cfg.default_model);
         const ps = await refreshProviders();
@@ -181,7 +185,7 @@ export default function App() {
           <div className="brand-logo">K</div>
           <div>
             <div className="brand-name">KUKIA CODE</div>
-            <div className="brand-sub">v0.1.0 · Fase 3</div>
+            <div className="brand-sub">v{info?.version ?? "0.1.0"} · Fase 3 · {info ? `build ${info.build}` : "build —"}</div>
           </div>
         </div>
         <nav>

@@ -19,6 +19,17 @@ export interface SystemInfo {
   data_dir: string;
 }
 
+export interface AppInfo {
+  version: string;
+  /** Fecha del ejecutable, AAAA-MM-DD HH:MM. */
+  build: string;
+  /** true si secrets.json está cifrado con DPAPI. */
+  secrets_dpapi: boolean;
+  /** true si hay claves guardadas pero el archivo sigue en claro. */
+  secrets_en_claro: boolean;
+  proveedores_con_clave: number;
+}
+
 export interface GpuStat {
   index: number;
   name: string;
@@ -901,6 +912,7 @@ export interface EntrenadorCfg {
 
 export const api = {
   systemInfo: () => invoke<SystemInfo>("get_system_info"),
+  appInfo: () => invoke<AppInfo>("app_info"),
   providers: () => invoke<ProviderInfo[]>("list_providers"),
   models: (provider: string) => invoke<ModelInfo[]>("list_models", { provider }),
   chat: (request: ChatRequest) => invoke<ChatResponse>("chat", { request }),

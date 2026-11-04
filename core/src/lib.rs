@@ -6,6 +6,7 @@
 pub mod agents;
 pub mod anime_real;
 pub mod bridge;
+pub mod buildinfo;
 pub mod catalog;
 pub mod config;
 pub mod control;
@@ -26,6 +27,7 @@ pub mod providers;
 pub mod radar;
 pub mod registry;
 pub mod research;
+pub mod secrets;
 pub mod security;
 pub mod serve;
 pub mod studio;

@@ -156,7 +156,7 @@ export default function Settings({ config, onSaved, notify }: Props) {
           <code>KUKIA_CLOUD_KEY_&lt;ID&gt;</code>, luego en{" "}
           <code>%APPDATA%\KukiaCode\secrets.json</code> y, en solo lectura, en el{" "}
           <code>auth.json</code> de OpenCode. Estado del proveedor activo:{" "}
-          {form.has_cloud_key ? "clave detectada ✓" : "sin clave"}.
+          {form.has_cloud_key ? "clave detectada ✓" : "sin clave"}. El archivo se guarda cifrado con DPAPI del usuario.
         </p>
       </div>
 

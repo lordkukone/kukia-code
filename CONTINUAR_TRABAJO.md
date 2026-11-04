@@ -80,6 +80,10 @@ empaquetado, no otra compilación. No perseguirlo.
 
 ### C0 — Credenciales protegidas (lo primero, bloquea lo demás)
 
+**Estado 04/11/2026: el cifrado está hecho.** `secrets.json` va cifrado con DPAPI
+(`core/src/secrets.rs`), se migra solo al arrancar y deja `secrets.json.legacy.bak`.
+Verificado en el binario release del 04/11. **Queda pendiente la vista CLOUD CREDENTIALS.**
+
 - `secrets.json` está en claro en `%APPDATA%\KukiaCode`. Migrar a **DPAPI** (`CryptProtectData`)
   manteniendo lectura del formato viejo para migrar sin perder nada.
 - Vista **CLOUD CREDENTIALS**: alta, prueba de conexión, revocación, «necesita configuración».

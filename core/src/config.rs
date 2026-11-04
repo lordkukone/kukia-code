@@ -111,21 +111,9 @@ pub fn cloud_credential(id: &str) -> (Option<String>, KeySource) {
     if let Some(k) = non_empty(std::env::var("KUKIA_CLOUD_KEY").ok()) {
         return (Some(k), KeySource::Env);
     }
-    let secrets = data_dir().join("secrets.json");
-    if let Ok(raw) = std::fs::read_to_string(&secrets) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-            for ruta in [v.get(&norm), v.get("providers").and_then(|p| p.get(&norm))]
-                .into_iter()
-                .flatten()
-            {
-                if let Some(k) = ruta.as_str() {
-                    let k = k.trim();
-                    if !k.is_empty() {
-                        return (Some(k.to_string()), KeySource::SecretsFile);
-                    }
-                }
-            }
-        }
+    // Claves cifradas con DPAPI (o el JSON en claro antiguo, si aún no se migró).
+    if let Some(k) = crate::secrets::buscar(&norm) {
+        return (Some(k), KeySource::SecretsFile);
     }
     if let Some(path) = auth_json_path() {
         if let Ok(raw) = std::fs::read_to_string(&path) {

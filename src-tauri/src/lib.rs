@@ -119,6 +119,11 @@ fn config_set(
     Ok(saved)
 }
 
+#[tauri::command]
+fn app_info() -> kukia_core::buildinfo::AppInfo {
+    kukia_core::buildinfo::app_info()
+}
+
 /* ------------------------- Proveedores ------------------------- */
 
 #[tauri::command]
@@ -2808,6 +2813,14 @@ pub fn run() {
         })
 
         .setup(move |app| {
+            // C0: si secrets.json quedó en texto plano, se cifra con DPAPI al arrancar.
+            match kukia_core::secrets::migrar() {
+                Ok(true) => kukia_core::logs::append("info", "secrets.json migrado a DPAPI"),
+                Ok(false) => {}
+                Err(e) => {
+                    kukia_core::logs::append("error", &format!("no se pudo migrar secrets.json: {e}"))
+                }
+            }
             // SQ1 — pool acotado de workers de la cola. Como máximo `MAX_WORKERS`
             // tareas, y solo están activas las que el usuario permita.
             for idx in 0..jobs::MAX_WORKERS {
@@ -2889,6 +2902,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_system_info,
+            app_info,
             config_get,
             config_set,
             list_providers,
