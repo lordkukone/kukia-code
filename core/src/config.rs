@@ -169,6 +169,9 @@ pub struct AppConfig {
     /// Proyecto activo: cuando tiene valor, sus rutas acotan la política del agente.
     #[serde(default)]
     pub active_project: Option<String>,
+    /// Motor local llama.cpp: 2 GPUs del i9 o 3 con el i7 por RPC.
+    #[serde(default)]
+    pub local_gpu: crate::localgpu::LocalGpuCfg,
 }
 
 fn default_true() -> bool {
@@ -191,6 +194,7 @@ impl Default for AppConfig {
             research_auto: true,
             reasoning: true,
             active_project: None,
+            local_gpu: crate::localgpu::LocalGpuCfg::default(),
         }
     }
 }

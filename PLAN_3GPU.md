@@ -110,3 +110,23 @@ ejecutada (no vale «debería»).
 
 ✅ Fase 0 entregada (este plan). ⚠️ 6 decisiones pendientes arriba. ❌ Nada de código tocado.
 Siguiente paso: tu OK a la Fase 1 y las respuestas a los 6 puntos.
+
+## 10. Estado tras la Fase 1 (04/11/2026)
+
+Implementado y compilado:
+
+- `core/src/localgpu/` con `flags` (argumentos y validacion puros), `rpc` (sonda TCP),
+  `proceso` (dueño del hijo, salida por lineas y parada con `taskkill /T /F`) y `mod`
+  (perfil, fallback, presupuesto de VRAM y GGUF disponibles).
+- `AppConfig.local_gpu` con `#[serde(default)]`: las configs viejas siguen cargando.
+- Comandos Tauri: `localgpu_config`, `localgpu_status`, `localgpu_start`, `localgpu_stop`,
+  `localgpu_probe_rpc`, `localgpu_ggufs`.
+- `localgpu_start` sondea el i7 y, si no responde, arranca en 2 GPUs con el motivo en `aviso`.
+
+Pruebas ejecutadas: 23 tests nuevos en verde; suite del nucleo **221 pasan, 0 fallan, 2 ignorados**;
+`cargo check --workspace --all-targets` EXIT 0.
+
+⚠️ **Sin prueba real de arranque**: en este equipo no hay `llama-server.exe` ni `rpc-server.exe`
+(buscados en PATH y en las rutas tipicas). Los tests no necesitan binarios, pero los criterios 1-4
+de aceptacion siguen sin verificar hasta descargar llama.cpp y poner su ruta en
+`local_gpu.llama_server`.

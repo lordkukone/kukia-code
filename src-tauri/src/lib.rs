@@ -1,6 +1,6 @@
 use kukia_core::{
     agents, bridge, catalog, config, control, ecosystem, engines, entrenador, gaming, gpu, hub, jobs,
-    lab, logs, mcp, registry, serve, tools, xoxete,
+    lab, localgpu, logs, mcp, registry, serve, tools, xoxete,
     memory::{AgentPolicy, AuditRow, Database, GamingAlertRow, GamingItem, Project},
     permissions, providers, radar, research, security, vram,
 };
@@ -2777,6 +2777,65 @@ fn logs_tail(lines: usize) -> Vec<String> {
 
 /* ------------------------- Arranque ------------------------- */
 
+/* ================= Motor local llama.cpp (2 o 3 GPUs) ================= */
+
+#[tauri::command]
+fn localgpu_config() -> localgpu::LocalGpuCfg {
+    config::load_config().local_gpu
+}
+
+#[tauri::command]
+fn localgpu_status() -> localgpu::EstadoProceso {
+    localgpu::proceso::status()
+}
+
+#[tauri::command]
+fn localgpu_stop() -> Result<localgpu::EstadoProceso, String> {
+    localgpu::proceso::parar()
+}
+
+#[tauri::command]
+async fn localgpu_probe_rpc() -> Result<localgpu::RpcSonda, String> {
+    let cfg = config::load_config();
+    let host = cfg.local_gpu.rpc_host.clone();
+    let tope = cfg.local_gpu.timeout_rpc_s;
+    tokio::task::spawn_blocking(move || localgpu::rpc::sondar(&host, tope))
+        .await
+        .map_err(|e| format!("la sonda del rpc-server fallo: {e}"))
+}
+
+/// Arranca llama-server. Antes sondea el i7: si no responde, baja a 2 GPUs en
+/// vez de dejar la app esperando.
+#[tauri::command]
+async fn localgpu_start() -> Result<localgpu::EstadoProceso, String> {
+    let cfg = config::load_config();
+    let pedido = cfg.local_gpu.perfil();
+    let host = cfg.local_gpu.rpc_host.clone();
+    let tope = cfg.local_gpu.timeout_rpc_s;
+    let sonda = if pedido == localgpu::Perfil::TresGpus {
+        tokio::task::spawn_blocking(move || localgpu::rpc::sondar(&host, tope))
+            .await
+            .map_err(|e| format!("la sonda del rpc-server fallo: {e}"))?
+    } else {
+        localgpu::RpcSonda {
+            ok: false,
+            destino: String::new(),
+            ms: 0,
+            detalle: "perfil de 2 GPUs: no se sondea el i7".into(),
+        }
+    };
+    let (perfil, motivo) = localgpu::perfil_efectivo(pedido, sonda.ok);
+    let mut est = localgpu::proceso::arrancar(&cfg.local_gpu, perfil)?;
+    est.aviso = Some(format!("{motivo} (sonda i7: {})", sonda.detalle));
+    Ok(est)
+}
+
+#[tauri::command]
+fn localgpu_ggufs(max: Option<usize>) -> Vec<localgpu::GgufDisponible> {
+    let cfg = config::load_config();
+    localgpu::ggufs(&cfg.local_gpu.rutas_gguf, max.unwrap_or(400))
+}
+
 pub fn run() {
     let dir = config::ensure_dirs();
     let db = Database::open(&dir.join("kukia.db")).expect("no se pudo abrir la base de datos");
@@ -2910,6 +2969,12 @@ pub fn run() {
             chat,
             chat_stream,
             gpu_stats,
+            localgpu_config,
+            localgpu_status,
+            localgpu_start,
+            localgpu_stop,
+            localgpu_probe_rpc,
+            localgpu_ggufs,
             sessions_list,
             session_create,
             session_rename,

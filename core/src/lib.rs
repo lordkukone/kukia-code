@@ -19,6 +19,7 @@ pub mod gpus;
 pub mod hub;
 pub mod jobs;
 pub mod lab;
+pub mod localgpu;
 pub mod logs;
 pub mod mcp;
 pub mod memory;
