@@ -187,7 +187,7 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
             {corriendo ? `corriendo · pid ${est?.pid}` : "parado"}
           </span>
           <span className="chip subtle">{est?.perfil ?? "—"}</span>
-          <span className={`chip ${rpcVivo ? "ok" : "subtle"}`}>
+          <span className="chip subtle">
             {rpcVivo === null ? "i7: ?" : rpcVivo ? "i7: listo" : "i7: sin respuesta"}
           </span>
         </div>

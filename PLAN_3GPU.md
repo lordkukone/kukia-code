@@ -171,3 +171,13 @@ No verificado: inferencia real con 3 GPUs, porque el RPC del i7 sigue apagado.
 El RPC del i7 queda arrancando solo por la tarea `llama-rpc`. KUKIA esta configurado en
 `tres_gpus` con `ctx = 131072`: si el i7 no responde, la sonda tarda 10 s y cae a 2 GPUs con aviso.
 Para parar el RPC del i7: `Stop-Process -Name ggml-rpc-server -Force` (o deshabilitar la tarea).
+
+## 16. Tercera GPU automatica (04/11/2026)
+
+- Al arrancar el motor, `localgpu_start` sondea el i7 con `rpc_timeout_s` (10 s): si responde usa
+  `tres_gpus` con `--rpc <host>:50052 --tensor-split 35,40,25`; si no, `solo_i9` y un aviso.
+- Si el motor ya esta en 2 GPUs y el i7 aparece despues, la tarjeta lo detecta (sondeo cada 10 s) y
+  ofrece «Pasar a 3 GPUs», que para y relanza sin cerrar KUKIA.
+- En el i7 la tarea `llama-rpc` arranca **al encender el equipo** (SYSTEM) y al iniciar sesion, asi que
+  no hace falta entrar en el escritorio. `arrancar_rpc.bat` no duplica instancias.
+- Medido: 131.072 contexto f16 -> 80,5 tok/s; 262.144 con KV q8_0 -> 62,2 tok/s.

@@ -193,7 +193,7 @@ Tests: 25 en localgpu; cargo check --workspace --all-targets EXIT 0.
 
 - `C:\llamarrancar_rpc.bat` ahora comprueba si el 50052 ya escucha y sale sin duplicar: antes se
   apilaban instancias (llegue a ver 4 procesos, solo uno escuchando).
-- Primer intento de guardia MAL: el `>/dev/null` del .bat se reescribio como `>/dev/null`, la comprobacion
+- Primer intento de guardia MAL: la redireccion a `nul` del .bat se convirtio en `>/dev/null`, la comprobacion
   daba verdadera siempre y el .bat salia sin arrancar nada; el i7 se quedo sin RPC. Se reescribio
   usando `%TEMP%` y el tamano del fichero (`%%~zA`), sin `nul`.
 - Tras reescribirlo: una instancia escuchando en el i7 y conexion correcta al 50052 desde el i9,
