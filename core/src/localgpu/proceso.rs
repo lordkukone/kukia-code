@@ -97,7 +97,40 @@ pub fn arrancar(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<EstadoProceso, Stri
     if con_estado(|st| st.corriendo) {
         return Err("ya hay un llama-server gestionado por KUKIA en marcha: páralo antes".into());
     }
-    let (exe, args) = flags::comando(cfg, perfil)?;
+    // Se miden las GPUs de verdad y se sondean los equipos remotos: entra en el
+    // reparto todo lo que haya, sean dos, tres o mas.
+    let locales = crate::localgpu::gpus::detectar().unwrap_or_default();
+    let mut remotos: Vec<String> = Vec::new();
+    if perfil == Perfil::TresGpus {
+        for h in cfg.hosts() {
+            let s = crate::localgpu::rpc::sondar(&h, cfg.timeout_rpc_s);
+            if s.ok {
+                remotos.push(s.destino.clone());
+            }
+        }
+    }
+    let mut disp: Vec<(String, u64)> = locales
+        .iter()
+        .map(|g| {
+            let vram = if g.libre_mb > 0 { g.libre_mb } else { g.total_mb };
+            (g.nombre.clone(), vram)
+        })
+        .collect();
+    for r in &remotos {
+        disp.push((r.clone(), cfg.rpc_vram_mb));
+    }
+    let split: Vec<u32> = if disp.len() <= 1 {
+        Vec::new()
+    } else if cfg.tensor_split.len() == disp.len() && cfg.tensor_split.iter().any(|x| *x > 0) {
+        cfg.tensor_split.clone()
+    } else {
+        crate::localgpu::gpus::reparto(&disp, cfg.reserva_vram_mb)
+    };
+    let exe = cfg.llama_server.trim().to_string();
+    if exe.is_empty() {
+        return Err("falta la ruta de llama-server.exe (local_gpu.llama_server)".into());
+    }
+    let args = flags::argumentos_con(cfg, perfil, &split, &remotos)?;
     if !std::path::Path::new(&exe).exists() {
         return Err(format!(
             "no encuentro llama-server en «{exe}»: pon la ruta real en local_gpu.llama_server"
@@ -166,6 +199,13 @@ pub fn arrancar(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<EstadoProceso, Stri
         st.aviso = None;
         st.lineas.clear();
         st.lineas.push(format!("lanzado: {exe} {}", args.join(" ")));
+        st.lineas.push(format!(
+            "dispositivos: {} locales + {} por RPC = {} (reparto {})",
+            locales.len(),
+            remotos.len(),
+            disp.len(),
+            if split.is_empty() { "-".to_string() } else { flags::split_texto(&split) }
+        ));
         st.clone()
     }))
 }

@@ -181,3 +181,13 @@ Para parar el RPC del i7: `Stop-Process -Name ggml-rpc-server -Force` (o deshabi
 - En el i7 la tarea `llama-rpc` arranca **al encender el equipo** (SYSTEM) y al iniciar sesion, asi que
   no hace falta entrar en el escritorio. `arrancar_rpc.bat` no duplica instancias.
 - Medido: 131.072 contexto f16 -> 80,5 tok/s; 262.144 con KV q8_0 -> 62,2 tok/s.
+
+## 17. Numero de GPUs variable (04/11/2026)
+
+- Las GPUs locales se cuentan con `nvidia-smi --query-gpu=index,name,memory.total,memory.free`.
+- Cada host de `rpc_hosts` (o el `rpc_host` suelto si la lista esta vacia) que abra el puerto suma una GPU
+  mas, con `rpc_vram_mb` declarados (por defecto 8.192).
+- `--tensor-split` se calcula en proporcion a la VRAM util (`libre - reserva_vram_mb`), pudiendo sumar 2, 3,
+  4 o mas dispositivos; con uno solo no se pasa la bandera.
+- Aviso de llama.cpp: pasar `--tensor-split` desactiva su ajuste automatico de capas. Es lo que queremos,
+  porque el reparto ya lo hemos calculado con la VRAM real.

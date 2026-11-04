@@ -198,3 +198,26 @@ Tests: 25 en localgpu; cargo check --workspace --all-targets EXIT 0.
   usando `%TEMP%` y el tamano del fichero (`%%~zA`), sin `nul`.
 - Tras reescribirlo: una instancia escuchando en el i7 y conexion correcta al 50052 desde el i9,
   con `localgpu_rpc_check` devolviendo `ok=true`.
+
+## Todas las GPUs disponibles, no solo dos (04/11/2026)
+
+| Archivo | Cambio | SHA-256 |
+|---|---|---|
+| `core/src/localgpu/gpus.rs` (nuevo) | detecta GPUs con `nvidia-smi` y reparte el modelo en proporcion a la VRAM util | `97ac9dec19b0f1718fd682876c5e410a72e80bfd6f2fb03a7515ed4a6d1c0375` |
+| `core/src/localgpu/flags.rs` | `argumentos_con(cfg, perfil, reparto, remotos)`: un `--rpc` por equipo | `b76d0074a471c2eaaf112db33514528faabcd546cfaef0d921ce4d3fa4fe6ca6` |
+| `core/src/localgpu/mod.rs` | `rpc_hosts`, `rpc_vram_mb`, `reserva_vram_mb`; perfil por defecto `tres_gpus` = todas | `39f25fdeccf3e273104deb09c7cbddef36a3c0ccc59b363b4c44166e7b2f8c66` |
+| `core/src/localgpu/proceso.rs` | mide la maquina, sondea cada host y calcula el reparto antes de lanzar | `fea7eb79d1b8b6fce285b8348654a734b734677d2698cbfeadc5a681fc815a2a` |
+| `app/src/lib/api.ts` | tipos `rpc_hosts`, `rpc_vram_mb`, `reserva_vram_mb` | `cb5b99c91d07cd2e89f61c6de6c5066ebfdac92330a9613f794f0b6cd3ca8410` |
+
+Antes el reparto estaba fijado a 2 o 3 GPUs. Ahora entra todo lo que exista: cada GPU local que liste
+`nvidia-smi` y una GPU por cada `rpc-server` que responda, con la VRAM declarada en `rpc_vram_mb`.
+Reparto proporcional a la VRAM libre menos `reserva_vram_mb` (700 MB por defecto), en porcentajes que
+suman 100 y nunca bajan de 1. Si `tensor_split` de la config tiene exactamente tantos valores como
+dispositivos, manda la config; si no, se calcula.
+
+Con este equipo: 2 locales + 1 RPC = 3 dispositivos. Reparto automatico 33,45,22 (11.5/15.6/7.5 GB
+utiles); la config trae 35,40,25 y, al coincidir en numero, se respeta.
+
+Prueba real por el codigo de KUKIA: `dispositivos: 2 locales + 1 por RPC = 3`, modelo cargado en 49,5 s,
+escuchando en 8099, parada limpia y cero procesos huerfanos. `cargo test -p kukia-core --lib`: **231 pasan,
+0 fallan, 2 ignorados**; `cargo check --workspace --all-targets` EXIT 0; `npm run build` EXIT 0.

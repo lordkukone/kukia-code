@@ -9,7 +9,7 @@ pub const HOST: &str = "127.0.0.1";
 pub const RPC_PUERTO: u16 = 50052;
 
 /// Comprobaciones que no tocan el disco: sirven antes de intentar lanzar nada.
-pub fn validar(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<(), String> {
+pub fn validar(cfg: &LocalGpuCfg, _perfil: Perfil) -> Result<(), String> {
     if cfg.modelo.trim().is_empty() {
         return Err("falta el modelo GGUF (local_gpu.modelo)".into());
     }
@@ -19,9 +19,8 @@ pub fn validar(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<(), String> {
     if cfg.puerto == 0 {
         return Err("el puerto no puede ser 0".into());
     }
-    if perfil == Perfil::TresGpus && cfg.rpc_host.trim().is_empty() {
-        return Err("el perfil de 3 GPUs necesita local_gpu.rpc_host (por ejemplo 192.168.50.2:50052)".into());
-    }
+    // El perfil de varias GPUs ya no exige host remoto: si no responde ninguno se
+    // usan solo las tarjetas del equipo. El reparto lo calcula `gpus::reparto`.
     Ok(())
 }
 
@@ -58,8 +57,15 @@ pub fn split_texto(v: &[u32]) -> String {
         .join(",")
 }
 
-/// Argumentos completos, en el orden en que los espera llama.cpp.
-pub fn argumentos(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<Vec<String>, String> {
+/// Argumentos con el reparto ya calculado a partir de la VRAM real de cada GPU y
+/// con un `--rpc` por equipo remoto que haya respondido. Con un solo dispositivo
+/// no se pasa `--tensor-split`: no hay nada que repartir.
+pub fn argumentos_con(
+    cfg: &LocalGpuCfg,
+    perfil: Perfil,
+    reparto: &[u32],
+    remotos: &[String],
+) -> Result<Vec<String>, String> {
     validar(cfg, perfil)?;
     let mut a: Vec<String> = Vec::new();
     a.push("-m".into());
@@ -82,13 +88,32 @@ pub fn argumentos(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<Vec<String>, Stri
     a.push(HOST.into());
     a.push("--port".into());
     a.push(cfg.puerto.to_string());
-    a.push("--tensor-split".into());
-    a.push(split_texto(&tensor_split(cfg, perfil)));
-    if perfil == Perfil::TresGpus {
-        a.push("--rpc".into());
-        a.push(cfg.rpc_host.trim().to_string());
+    if reparto.len() > 1 {
+        a.push("--tensor-split".into());
+        a.push(split_texto(reparto));
+    }
+    for r in remotos {
+        if !r.trim().is_empty() {
+            a.push("--rpc".into());
+            a.push(r.trim().to_string());
+        }
     }
     Ok(a)
+}
+
+/// Argumentos sin medir la maquina: usa el reparto de la configuracion y los
+/// equipos remotos declarados. Lo usan los ejemplos y las pruebas.
+pub fn argumentos(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<Vec<String>, String> {
+    let split = tensor_split(cfg, perfil);
+    let remotos: Vec<String> = if perfil == Perfil::TresGpus {
+        cfg.hosts()
+            .into_iter()
+            .map(|h| crate::localgpu::rpc::normalizar(&h))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    argumentos_con(cfg, perfil, &split, &remotos)
 }
 
 /// Ejecutable y argumentos. Valida que la ruta del binario esté configurada.
@@ -147,10 +172,33 @@ mod tests {
     }
 
     #[test]
-    fn tres_gpus_sin_host_se_rechaza() {
+    fn sin_host_remoto_se_usa_lo_local_sin_rpc() {
         let mut c = cfg_base();
         c.rpc_host = "   ".into();
-        assert!(crate::localgpu::flags::argumentos(&c, Perfil::TresGpus).is_err());
+        c.rpc_hosts = Vec::new();
+        let a = argumentos(&c, Perfil::TresGpus).unwrap();
+        assert!(!a.iter().any(|x| x == "--rpc"), "sin equipos remotos no hay --rpc: {a:?}");
+        assert!(a.iter().any(|x| x == "--tensor-split"));
+    }
+
+    #[test]
+    fn varios_equipos_remotos_dan_varios_rpc() {
+        let mut c = cfg_base();
+        c.rpc_hosts = vec!["192.168.50.2".into(), "192.168.50.3:50052".into()];
+        let a = argumentos(&c, Perfil::TresGpus).unwrap();
+        let rpc: Vec<&String> = a.windows(2).filter(|w| w[0] == "--rpc").map(|w| &w[1]).collect();
+        assert_eq!(rpc.len(), 2, "{a:?}");
+        assert_eq!(rpc[0], "192.168.50.2:50052");
+        assert_eq!(rpc[1], "192.168.50.3:50052");
+    }
+
+    #[test]
+    fn el_reparto_calculado_sustituye_al_de_la_config() {
+        let mut c = cfg_base();
+        c.tensor_split = vec![50, 50];
+        let a = argumentos_con(&c, Perfil::TresGpus, &[33, 45, 22], &[]).unwrap();
+        let i = a.iter().position(|x| x == "--tensor-split").unwrap();
+        assert_eq!(a[i + 1], "33,45,22");
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! (compatible OpenAI). Si el i7 no responde, se usa solo el i9.
 
 pub mod flags;
+pub mod gpus;
 pub mod proceso;
 pub mod rpc;
 
@@ -25,7 +26,8 @@ impl Perfil {
     /// Acepta lo que el usuario escriba en la configuracion sin romperse.
     pub fn desde(texto: &str) -> Self {
         match texto.trim().to_lowercase().as_str() {
-            "tres_gpus" | "tres" | "3gpu" | "3-gpu" | "lan" | "tres gpus" => Perfil::TresGpus,
+            "tres_gpus" | "tres" | "3gpu" | "3-gpu" | "lan" | "tres gpus" | "auto" | "todas" | "all"
+                => Perfil::TresGpus,
             _ => Perfil::SoloI9,
         }
     }
@@ -47,7 +49,7 @@ impl Perfil {
     pub fn etiqueta(self) -> &'static str {
         match self {
             Perfil::SoloI9 => "2 GPUs (i9)",
-            Perfil::TresGpus => "3 GPUs (i9 + i7 por RPC)",
+            Perfil::TresGpus => "todas las GPUs disponibles (locales + RPC)",
         }
     }
 }
@@ -70,6 +72,12 @@ pub struct LocalGpuCfg {
     /// Proporciones por GPU; para 2 GPUs se usan los dos primeros valores.
     pub tensor_split: Vec<u32>,
     pub rpc_host: String,
+    /// Un `rpc-server` por equipo: cada uno suma su GPU al reparto.
+    pub rpc_hosts: Vec<String>,
+    /// VRAM declarada de cada equipo remoto (no se puede leer por red).
+    pub rpc_vram_mb: u64,
+    /// Margen que se deja libre en cada tarjeta al repartir.
+    pub reserva_vram_mb: u64,
     pub vram_i7_gb: f64,
     pub rutas_gguf: Vec<String>,
     pub timeout_rpc_s: u64,
@@ -82,13 +90,16 @@ impl Default for LocalGpuCfg {
             llama_server: String::new(),
             rpc_server: String::new(),
             modelo: String::new(),
-            perfil: "solo_i9".into(),
+            perfil: "tres_gpus".into(),
             puerto: 8080,
             ctx: 8192,
             ngl: 0, // 0 = que llama.cpp reparta las capas (necesario para contexto grande)
             kv_q8: false,
             tensor_split: vec![35, 40, 25],
             rpc_host: "192.168.50.2:50052".into(),
+            rpc_hosts: Vec::new(),
+            rpc_vram_mb: 8192,
+            reserva_vram_mb: 700,
             vram_i7_gb: 8.0,
             rutas_gguf: Vec::new(),
             timeout_rpc_s: 10,
@@ -100,6 +111,21 @@ impl Default for LocalGpuCfg {
 impl LocalGpuCfg {
     pub fn perfil(&self) -> Perfil {
         Perfil::desde(&self.perfil)
+    }
+
+    /// Equipos remotos a sondear: la lista nueva y, si esta vacia, el host suelto
+    /// de siempre. Asi una config vieja sigue sumando la GPU del i7.
+    pub fn hosts(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .rpc_hosts
+            .iter()
+            .map(|h| h.trim().to_string())
+            .filter(|h| !h.is_empty())
+            .collect();
+        if v.is_empty() && !self.rpc_host.trim().is_empty() {
+            v.push(self.rpc_host.trim().to_string());
+        }
+        v
     }
 }
 
@@ -116,6 +142,25 @@ pub fn perfil_efectivo(pedido: Perfil, rpc_ok: bool) -> (Perfil, String) {
             "el rpc-server del i7 no responde: se cae a las 2 GPUs del i9".into(),
         ),
         (Perfil::SoloI9, _) => (Perfil::SoloI9, "perfil de 2 GPUs del i9".into()),
+    }
+}
+
+/// Igual que `perfil_efectivo` pero contando cuantos equipos remotos respondieron:
+/// con ninguno se usan solo las GPUs locales.
+pub fn perfil_efectivo_con(pedido: Perfil, remotos: usize) -> (Perfil, String) {
+    match (pedido, remotos) {
+        (Perfil::TresGpus, n) if n > 0 => (
+            Perfil::TresGpus,
+            format!("{n} GPU(s) remota(s) responden: se suman a las locales"),
+        ),
+        (Perfil::TresGpus, _) => (
+            Perfil::SoloI9,
+            "ningun rpc-server responde: solo las GPUs del equipo".into(),
+        ),
+        (Perfil::SoloI9, _) => (
+            Perfil::SoloI9,
+            "perfil fijado a las GPUs del equipo".into(),
+        ),
     }
 }
 
@@ -174,7 +219,7 @@ mod tests {
 
     #[test]
     fn el_perfil_por_defecto_es_el_i9_solo() {
-        assert_eq!(LocalGpuCfg::default().perfil(), Perfil::SoloI9);
+        assert_eq!(LocalGpuCfg::default().perfil(), Perfil::TresGpus);
         assert_eq!(LocalGpuCfg::default().puerto, 8080);
     }
 
@@ -210,9 +255,19 @@ mod tests {
     #[test]
     fn una_config_vacia_del_motor_local_toma_los_valores_por_defecto() {
         let c: LocalGpuCfg = serde_json::from_str("{}").unwrap();
-        assert_eq!(c.perfil, "solo_i9");
+        assert_eq!(c.perfil, "tres_gpus");
         assert_eq!(c.ctx, 8192);
         assert_eq!(c.timeout_rpc_s, 10);
+    }
+
+    #[test]
+    fn los_hosts_nuevos_mandan_sobre_el_host_suelto() {
+        let mut c = LocalGpuCfg::default();
+        c.rpc_hosts = vec![" 192.168.50.3 ".into(), "".into()];
+        assert_eq!(c.hosts(), vec!["192.168.50.3".to_string()]);
+        c.rpc_hosts = Vec::new();
+        c.rpc_host = "192.168.50.2:50052".into();
+        assert_eq!(c.hosts(), vec!["192.168.50.2:50052".to_string()]);
     }
 
     #[test]

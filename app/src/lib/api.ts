@@ -921,6 +921,9 @@ export interface LocalGpuCfg {
   ngl: number;
   tensor_split: number[];
   rpc_host: string;
+  rpc_hosts?: string[];
+  rpc_vram_mb?: number;
+  reserva_vram_mb?: number;
   vram_i7_gb: number;
   rutas_gguf: string[];
   timeout_rpc_s: number;
