@@ -22,6 +22,7 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
   const [est, setEst] = useState<LocalGpuEstado | null>(null);
   const [ggufs, setGgufs] = useState<GgufDisponible[]>([]);
   const [sonda, setSonda] = useState<RpcSonda | null>(null);
+  const [rpcVivo, setRpcVivo] = useState<boolean | null>(null);
   const [faena, setFaena] = useState("");
 
   useEffect(() => {
@@ -57,6 +58,15 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
   useEffect(() => {
     api.localgpuConfig().then(setLg).catch((e) => notify(`Motor local: ${e}`));
     api.localgpuGgufs().then(setGgufs).catch(() => setGgufs([]));
+    // Vigila el i7 para poder sumar la tercera GPU sin reiniciar KUKIA.
+    const mirarI7 = () =>
+      api
+        .localgpuProbeRpc()
+        .then((r) => setRpcVivo(r.ok))
+        .catch(() => setRpcVivo(false));
+    mirarI7();
+    const vigilante = window.setInterval(mirarI7, 10000);
+    return () => window.clearInterval(vigilante);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -176,6 +186,10 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
           <span className={`chip ${corriendo ? "ok" : "subtle"}`}>
             {corriendo ? `corriendo · pid ${est?.pid}` : "parado"}
           </span>
+          <span className="chip subtle">{est?.perfil ?? "—"}</span>
+          <span className={`chip ${rpcVivo ? "ok" : "subtle"}`}>
+            {rpcVivo === null ? "i7: ?" : rpcVivo ? "i7: listo" : "i7: sin respuesta"}
+          </span>
         </div>
         <p className="muted">
           KUKIA arranca y para su propio llama-server. Con el perfil de 3 GPUs también lanza el RPC
@@ -249,6 +263,17 @@ export default function Gpu({ notify }: { notify: (m: string) => void }) {
           </button>
           <button className="btn" disabled={!!faena || !lg || corriendo} onClick={guardar}>
             Guardar
+          </button>
+          <button
+            className="btn"
+            disabled={!!faena || !corriendo || !rpcVivo || est?.perfil === "TresGpus"}
+            title="El i7 responde: reinicia el motor repartiendo entre las tres GPUs"
+            onClick={async () => {
+              await accion("Parar", api.localgpuStop);
+              await accion("Arrancar", api.localgpuStart, "Motor local en 3 GPUs");
+            }}
+          >
+            Pasar a 3 GPUs
           </button>
         </div>
         {sonda && (

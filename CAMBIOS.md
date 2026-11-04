@@ -175,3 +175,16 @@ saludable en 32 s). RAM del i9: 63,9 GB totales, quedan 12,8 GB libres.
 Conclusion: el maximo real es 262.144 (el nativo del modelo), pero solo con KV q8_0 y cuesta
 un 23 por ciento de generacion y 6 veces menos prefill. La config se queda en 131.072 con KV normal.
 Tests: 25 en localgpu; cargo check --workspace --all-targets EXIT 0.
+
+## 3 GPUs automaticas cuando el i7 esta encendido (04/11/2026)
+
+| Archivo | Cambio | SHA-256 |
+|---|---|---|
+| `app/src/views/Gpu.tsx` | chip de perfil y de estado del i7, vigilante cada 10 s y boton «Pasar a 3 GPUs» | `fff4dfb77c562759bb014465d54d3bf967b15a9d7174e01d81fc51b404791eff` |
+
+- Al arrancar, `localgpu_start` ya sondea el i7: si responde usa `tres_gpus`, si no cae a `solo_i9` con aviso en 10 s.
+- Nuevo: si el motor arranco en 2 GPUs y el i7 aparece despues, la tarjeta lo detecta sola y el boton
+  «Pasar a 3 GPUs» reinicia el motor sin cerrar KUKIA.
+- En el i7, la tarea `llama-rpc` pasa a tener dos disparadores: **al iniciar el equipo** (como SYSTEM) y
+  al iniciar sesion, con nivel alto. Asi el RPC esta listo aunque nadie haya entrado en el escritorio.
+- Verificado: interfaz compila (npm run build EXIT 0) y el 50052 abre desde el i9 tras re-registrar la tarea.
