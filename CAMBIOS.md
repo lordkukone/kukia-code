@@ -156,3 +156,22 @@ impide cargar. Nuevo test: `sin_ngl_cuando_es_cero_para_que_decida_llama_cpp` (2
 Verificado con el codigo de KUKIA y las 3 GPUs: sonda `ok=true` en 2 ms, decision `TresGpus`,
 arranque con `--rpc 192.168.50.2:50052 --tensor-split 35,40,25`, modelo cargado en 73,1 s
 y parada limpia (EXIT 0, sin hijos).
+
+## Contexto 256k con KV q8_0 (04/11/2026)
+
+| Archivo | Cambio | SHA-256 |
+|---|---|---|
+| `core/src/localgpu/flags.rs` | `-ctk q8_0 -ctv q8_0` cuando `kv_q8` esta activo | `976234c6daf973716cb27180ec7b9025d3050890280edb95b36ff54b76ff1b4e` |
+| `core/src/localgpu/mod.rs` | nuevo campo `kv_q8` (por defecto false) | `6864d605057d883f0367e3f8995b52be28bfa5ea382b0ace64618ef736bf72f5` |
+
+Medido con 3 GPUs y `-c 262144 -ctk q8_0 -ctv q8_0`: carga y responde (n_ctx real 262144,
+saludable en 32 s). RAM del i9: 63,9 GB totales, quedan 12,8 GB libres.
+
+| Contexto | KV | Gen (caliente) | Gen (prompt 4,7k) | Prefill 4,7k |
+|---|---|---|---|---|
+| 131.072 | f16 | 80,5 tok/s | 71,0 tok/s | 1.196 tok/s |
+| 262.144 | q8_0 | 62,2 tok/s | 62,2 tok/s | 192,5 tok/s |
+
+Conclusion: el maximo real es 262.144 (el nativo del modelo), pero solo con KV q8_0 y cuesta
+un 23 por ciento de generacion y 6 veces menos prefill. La config se queda en 131.072 con KV normal.
+Tests: 25 en localgpu; cargo check --workspace --all-targets EXIT 0.
