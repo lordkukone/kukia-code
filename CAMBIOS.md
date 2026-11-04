@@ -188,3 +188,10 @@ Tests: 25 en localgpu; cargo check --workspace --all-targets EXIT 0.
 - En el i7, la tarea `llama-rpc` pasa a tener dos disparadores: **al iniciar el equipo** (como SYSTEM) y
   al iniciar sesion, con nivel alto. Asi el RPC esta listo aunque nadie haya entrado en el escritorio.
 - Verificado: interfaz compila (npm run build EXIT 0) y el 50052 abre desde el i9 tras re-registrar la tarea.
+
+### Limpieza del RPC en el i7 (04/11/2026)
+
+- `C:\llamarrancar_rpc.bat` ahora comprueba si el 50052 ya escucha y sale sin duplicar: antes se
+  apilaban instancias (llegue a ver 4 procesos, solo uno escuchando).
+- Se mataron las sobrantes y se relanzo por la tarea `llama-rpc`: queda **una** instancia escuchando.
+- Verificado desde el i9 tras la limpieza: conexion al 50052 correcta.
