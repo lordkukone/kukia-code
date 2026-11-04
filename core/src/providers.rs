@@ -743,7 +743,7 @@ pub async fn chat_stream_con(
     tx: UnboundedSender<ChatEvent>,
 ) -> Result<(), String> {
     let result = match req.provider.as_str() {
-        "lmstudio" | "cloud" | "llamacpp" => stream_openai(req, cfg, &tx).await,
+        "lmstudio" | "cloud" | "llamacpp" => stream_openai(req, cfg, db, &tx).await,
         _ => stream_ollama(req, cfg, db, &tx).await,
     };
     if let Err(e) = &result {
@@ -1039,6 +1039,7 @@ async fn stream_ollama_intento(
 async fn stream_openai(
     req: &ChatRequest,
     cfg: &AppConfig,
+    db: Option<&herramientas::Db>,
     tx: &UnboundedSender<ChatEvent>,
 ) -> Result<(), String> {
     let url = join_api(
@@ -1046,62 +1047,62 @@ async fn stream_openai(
         "/chat/completions",
     );
     let started = Instant::now();
-    let mut body = json!({
-        "model": req.model,
-        "messages": build_messages(req),
-        "temperature": req.temperature.unwrap_or(cfg.temperature),
-        "stream": true
-    });
-    if let Some(mt) = req.max_tokens {
-        body["max_tokens"] = json!(mt);
-    }
-    let mut builder = client(600).post(&url).json(&body);
-    if let Some(k) = cloud_key(cfg) {
-        builder = builder.bearer_auth(k);
-    }
-    let sesion = uuid::Uuid::new_v4().to_string();
-    builder = con_sesion(builder, cfg, &sesion);
-    let resp = builder.send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("HTTP {status}: {text}"));
-    }
+    let politica = herramientas::politica(req, db);
+    // LM Studio y llama.cpp no tienen /api/show de Ollama: si el usuario pide
+    // herramientas se ofrecen y el servidor decide (llama-server exige --jinja).
+    let defs = if req.tools {
+        herramientas::esquemas(&politica, req.aprobar)
+    } else {
+        Vec::new()
+    };
+    let mut mensajes = build_messages(req);
+    for paso in 0..=herramientas::MAX_PASOS {
+        let mut body = json!({
+            "model": req.model,
+            "messages": mensajes.clone(),
+            "temperature": req.temperature.unwrap_or(cfg.temperature),
+            "stream": true
+        });
+        if let Some(mt) = req.max_tokens {
+            body["max_tokens"] = json!(mt);
+        }
+        if !defs.is_empty() {
+            body["tools"] = json!(defs);
+            body["tool_choice"] = json!("auto");
+        }
+        let mut builder = client(600).post(&url).json(&body);
+        if let Some(k) = cloud_key(cfg) {
+            builder = builder.bearer_auth(k);
+        }
+        let sesion = uuid::Uuid::new_v4().to_string();
+        builder = con_sesion(builder, cfg, &sesion);
+        let resp = builder.send().await.map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("HTTP {status}: {text}"));
+        }
 
-    let mut stream = resp.bytes_stream();
-    let mut buf = String::new();
-    let mut completion_tokens = 0u64;
-    // Mismo fallo que en Ollama, con otro nombre: si el modelo se queda sin
-    // presupuesto antes de escribir, `finish_reason` es "length" y `content`
-    // nunca llega. Aquí NO se reintenta (cada intento cuesta dinero).
-    let mut hubo_contenido = false;
-    let mut motivo = String::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| e.to_string())?;
-        buf.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(pos) = buf.find('\n') {
-            let line: String = buf.drain(..=pos).collect();
-            let line = line.trim();
-            if let Some(data) = line.strip_prefix("data:") {
+        let mut stream = resp.bytes_stream();
+        let mut buf = String::new();
+        let mut completion_tokens = 0u64;
+        let mut hubo_contenido = false;
+        let mut motivo = String::new();
+        let mut texto_turno = String::new();
+        // (id, nombre, argumentos) por indice de llamada del stream.
+        let mut llamadas: Vec<(String, String, String)> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| e.to_string())?;
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(pos) = buf.find('\n') {
+                let line: String = buf.drain(..=pos).collect();
+                let line = line.trim();
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue;
+                };
                 let data = data.trim();
                 if data == "[DONE]" {
-                    if !hubo_contenido {
-                        let _ = tx.send(ChatEvent::Error {
-                            message: format!(
-                                "{}: el modelo no produjo texto final (finish_reason={}). \
-                                 Sube «máx. tokens» o desactiva el razonamiento.",
-                                req.provider,
-                                if motivo.is_empty() { "—" } else { motivo.as_str() }
-                            ),
-                        });
-                        return Ok(());
-                    }
-                    let _ = tx.send(ChatEvent::Done {
-                        prompt_tokens: 0,
-                        completion_tokens,
-                        total_ms: started.elapsed().as_millis() as u64,
-                    });
-                    return Ok(());
+                    continue;
                 }
                 if let Ok(v) = serde_json::from_str::<Value>(data) {
                     if let Some(fr) = v["choices"][0]["finish_reason"].as_str() {
@@ -1120,24 +1121,114 @@ async fn stream_openai(
                         if !texto.is_empty() {
                             hubo_contenido = true;
                             completion_tokens += 1;
+                            texto_turno.push_str(texto);
                             let _ = tx.send(ChatEvent::Token {
                                 text: texto.to_string(),
                             });
                         }
                     }
+                    if let Some(arr) = delta["tool_calls"].as_array() {
+                        for c in arr {
+                            let idx = c["index"].as_u64().unwrap_or(0) as usize;
+                            while llamadas.len() <= idx {
+                                llamadas.push((String::new(), String::new(), String::new()));
+                            }
+                            if let Some(id) = c["id"].as_str() {
+                                if !id.is_empty() {
+                                    llamadas[idx].0 = id.to_string();
+                                }
+                            }
+                            if let Some(n) = c["function"]["name"].as_str() {
+                                llamadas[idx].1.push_str(n);
+                            }
+                            if let Some(a) = c["function"]["arguments"].as_str() {
+                                llamadas[idx].2.push_str(a);
+                            }
+                        }
+                    }
                 }
             }
         }
+
+        if !llamadas.is_empty() && paso < herramientas::MAX_PASOS {
+            let mut assistant = json!({ "role": "assistant", "content": texto_turno });
+            let calls: Vec<Value> = llamadas
+                .iter()
+                .map(|(id, nombre, args)| {
+                    json!({
+                        "id": if id.is_empty() { format!("call_{}", uuid::Uuid::new_v4()) } else { id.clone() },
+                        "type": "function",
+                        "function": {
+                            "name": nombre,
+                            "arguments": if args.trim().is_empty() { "{}".to_string() } else { args.clone() }
+                        }
+                    })
+                })
+                .collect();
+            assistant["tool_calls"] = json!(calls);
+            mensajes.push(assistant);
+            for (id, nombre, args) in &llamadas {
+                let valor: Value = serde_json::from_str(if args.trim().is_empty() { "{}" } else { args })
+                    .unwrap_or_else(|_| json!({}));
+                let _ = tx.send(ChatEvent::ToolCall {
+                    nombre: nombre.clone(),
+                    argumentos: args.clone(),
+                });
+                let (ok, texto) = match herramientas::ejecutar(nombre, &valor, &politica, req.aprobar, db).await {
+                    Ok(t) => (true, t),
+                    Err(e) => (false, e),
+                };
+                let _ = tx.send(ChatEvent::ToolResult {
+                    nombre: nombre.clone(),
+                    ok,
+                    texto: texto.clone(),
+                });
+                // Un listado enorme se come el contexto del modelo: se recorta.
+                let recortado: String = if texto.chars().count() > 3000 {
+                    let mut s: String = texto.chars().take(3000).collect();
+                    s.push_str("
+... (recortado: el resultado era demasiado largo)");
+                    s
+                } else {
+                    texto.clone()
+                };
+                mensajes.push(json!({
+                    "role": "tool",
+                    "tool_call_id": if id.is_empty() { "call_0".to_string() } else { id.clone() },
+                    "content": recortado
+                }));
+            }
+            continue;
+        }
+
+        if !hubo_contenido && llamadas.is_empty() {
+            let _ = tx.send(ChatEvent::Error {
+                message: format!(
+                    "{}: el modelo no produjo texto final (finish_reason={}). \
+                     Sube «máx. tokens» o desactiva el razonamiento.",
+                    req.provider,
+                    if motivo.is_empty() { "—" } else { motivo.as_str() }
+                ),
+            });
+            return Ok(());
+        }
+        let _ = tx.send(ChatEvent::Done {
+            prompt_tokens: 0,
+            completion_tokens,
+            total_ms: started.elapsed().as_millis() as u64,
+        });
+        return Ok(());
     }
-    let _ = tx.send(ChatEvent::Done {
-        prompt_tokens: 0,
-        completion_tokens,
-        total_ms: started.elapsed().as_millis() as u64,
+    let _ = tx.send(ChatEvent::Error {
+        message: format!(
+            "{}: se agotaron los {} pasos de herramientas sin respuesta final",
+            req.provider,
+            herramientas::MAX_PASOS
+        ),
     });
     Ok(())
 }
 
-/* ============================ Tests ============================ */
 
 #[cfg(test)]
 mod tests {

@@ -53,3 +53,20 @@ Dato: en esta version el servidor RPC se llama `ggml-rpc-server.exe`, no `rpc-se
 Correccion (04/11): la primera escritura fue a una copia de la carpeta de backups.
 La config viva (`%APPDATA%\KukiaCode\config\config.json`) se copio antes a
 `backups/3gpu_2026-11-04/config_viva_antes_fase2.json` y se parcheo despues.
+
+## Fase 3 — herramientas en el motor local y medida del Flint (04/11/2026)
+
+| Archivo | Cambio | SHA-256 |
+|---|---|---|
+| `core/src/providers.rs` | `stream_openai` ofrece herramientas, recoge `tool_calls` del stream, las ejecuta y sigue la conversacion (hasta 6 pasos); resultado recortado a 3000 caracteres | `f4981c33be1179d3624782ff5cd6f8cbd60e929f10919e3e1eb71dee0197beab` |
+| `core/examples/llamacpp_tools.rs` | creado: chat real con herramientas contra llama-server | `228c49a015cb9cb6b182f91248a4b999cee35c316e7c9616e82cc61db3aea9db` |
+
+Medidas reales (Flint-40B-A2.5B-NVFP4, 22,9 GB, 2 GPUs del i9, ctx 4096):
+generacion **83,7 tok/s** (160 tokens), **100,4 tok/s** en una llamada de herramienta,
+prompt corto 32,1 tok/s. El modelo emite `tool_calls` correctamente con `--jinja`.
+Herramientas usadas de verdad en la prueba: `files_list`, `files_find`, `dir_tree` (33 disponibles).
+
+Hallazgos:
+- El puerto 8080 esta ocupado por `nvpair-proxy.exe` (PAIR de NVIDIA): la config pasa a **8090**.
+- El ajuste automatico de memoria de b12110 aborta si se fuerza `-ngl 99` sin sitio: no pasar `-ngl`.
+- Un `dir_tree` de raiz supero el contexto (7364 > 4096 tokens): por eso el recorte a 3000 caracteres.

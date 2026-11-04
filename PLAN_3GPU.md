@@ -152,3 +152,10 @@ RTX 2070 del i7 (`192.168.50.2`), en esa maquina, en una consola:
 Y en el firewall de ese equipo, dejar entrar TCP 50052 (ya autorizado por el usuario).
 En el i9 basta con pulsar "Probar i7" en la vista GPU: si responde, el perfil de 3 GPUs lo usa;
 si no, arranca en 2 GPUs con aviso y el chat sigue funcionando.
+
+## 13. Estado tras la Fase 3 (04/11/2026)
+
+- Las tres GPUs NO se han podido probar: el `ggml-rpc-server` del i7 sigue apagado
+  (192.168.50.2:50052 cerrado). Todo lo medido es con las 2 GPUs del i9.
+- Con herramientas activas el camino OpenAI ya ejecuta `tool_calls`; antes las ignoraba.
+- Pendiente: recompilar el binario de release con estos cambios y probar el chat desde la UI.
