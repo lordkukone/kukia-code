@@ -165,3 +165,9 @@ si no, arranca en 2 GPUs con aviso y el chat sigue funcionando.
 Verificado: sonda al i7 en 10,002 s con decision `SoloI9` y motivo; arranque forzado con `--rpc`
 falla y muere, por lo que el sondeo previo es lo que evita un fallo duro.
 No verificado: inferencia real con 3 GPUs, porque el RPC del i7 sigue apagado.
+
+## 15. 3 GPUs operativas (04/11/2026)
+
+El RPC del i7 queda arrancando solo por la tarea `llama-rpc`. KUKIA esta configurado en
+`tres_gpus` con `ctx = 131072`: si el i7 no responde, la sonda tarda 10 s y cae a 2 GPUs con aviso.
+Para parar el RPC del i7: `Stop-Process -Name ggml-rpc-server -Force` (o deshabilitar la tarea).

@@ -105,3 +105,27 @@ Medido con un solo llama-server, sin `-ngl` (ajuste automatico) y sin LM Studio 
   (GPU1 a 14.363 de 16.311 MB, GPU0 a 11.506 de 12.227 MB).
 - Config de la app: `local_gpu.ctx = 65536`.
 - Con la 2070 del i7 por RPC habria ~8 GB mas y el 131k deberia caber entero, pero el RPC sigue apagado.
+
+## 3 GPUs verificadas: RPC del i7 en marcha (04/11/2026)
+
+Montaje hecho en el i7 (`DESKTOP-6CK4U6H`, admin por WinRM):
+
+- `H:\llama` copiado a `C:\llama` (736 MB, con ggml-cuda.dll y ggml-rpc.dll).
+- Firewall: reglas «llama.cpp RPC 50052» y «llama.cpp RPC 50052 (programa)», TCP entrante, perfil Any.
+- `C:\llamarrancar_rpc.bat` + tarea programada **`llama-rpc`** al iniciar sesion (RunLevel Highest).
+  Importante: si el proceso se lanza dentro de una sesion de WinRM, muere al cerrarla; la tarea no.
+- Verificado desde el i9: `192.168.50.2:50052` abre en **11 ms**.
+
+Medidas con `--rpc 192.168.50.2:50052` (Flint 40B NVFP4):
+
+| Montaje | ctx | Gen (corto, caliente) | Gen (prompt 4,7k) | Prefill 4,7k |
+|---|---|---|---|---|
+| 2 GPUs | 65.536 | 100,7 tok/s | 96,5 tok/s | 2.377 tok/s |
+| 3 GPUs | 65.536 | ~77 tok/s | 77,5 tok/s | 122 tok/s (frio) |
+| 2 GPUs | 131.072 | 69,8 tok/s | 72,4 tok/s | 899 tok/s |
+| **3 GPUs** | **131.072** | **80,5 tok/s** | **71,0 tok/s** | **1.196 tok/s** |
+
+- Con 3 GPUs el 131.072 cabe **entero en VRAM** (i9: 11.528 / 12.103 MB; i7 aporta ~7 GB),
+  por eso a contexto grande es mas rapido que con 2 GPUs (sin capas en CPU).
+- A 65.536 las 2 GPUs siguen siendo mas rapidas: el RPC por LAN cuesta mas de lo que aporta.
+- Config de la app: `perfil = tres_gpus`, `ctx = 131072`, `puerto = 8090`.
