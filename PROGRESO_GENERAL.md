@@ -194,3 +194,31 @@ Antes la cabecera decia `v0.1.0 · Fase 3`, identico en el binario del 01/11, el
 `v0.1.0 · Fase 3 · build AAAA-MM-DD HH:MM`, leido del ejecutable en marcha por el comando `app_info`
 (`core/src/buildinfo.rs`). Es la fecha de modificacion del binario, no un numero de compilacion
 grabado (eso pediria `build.rs`), pero cambia con cada compilacion y cada instalacion y no miente.
+
+### Corregido el binario del 04/11: hay que compilar con `tauri build` (04/11/2026, 15:38)
+
+Al ir a verificar el chat mirando la ventana real (no solo el hash) aparecieron dos fallos del build
+publicado como `build-20261104-1346`:
+
+| Sintoma | Causa |
+|---|---|
+| Ventana de 157x25 en vez de 1440x900 | el ejecutable esta compilado en **modo dev** |
+| Dentro se ve "Vaya... no se puede obtener la pagina" | intenta cargar `http://localhost:1420` (`devUrl`) en vez del frontend embebido |
+
+`cargo build --release` **no** produce un binario distribuible en Tauri 2: no activa
+`custom-protocol`, de modo que `tauri::generate_context!()` no embebe `dist/` y la webview pide el
+servidor de Vite. El comando correcto es `npx tauri build` (o `npm run tauri:build`).
+
+Medido, para que no vuelva a pasar:
+
+| Binario | Ventana inicial | Contenido |
+|---|---|---|
+| instalado 02/11 21:30 | 1295x735 | interfaz OK |
+| release defectuoso `build-20261104-1346` | 157x25 | pagina de error de WebView2 |
+| release bueno `build-20261104-1538` | 1295x735 | interfaz completa, cabecera con build |
+
+El 1295x735 no es un fallo: en esta pantalla de 1280x720 es el recorte de los 1440x900 pedidos.
+
+**Regla**: no distribuir nunca un `target/release/kukia-code.exe` que venga de `cargo build`, y
+comprobar el binario abriendo la ventana, no solo con el hash. La captura fiable es `PrintWindow`
+con `PW_RENDERFULLCONTENT`: `CopyFromScreen` copia lo que se ve en pantalla y devuelve otra ventana.

@@ -125,3 +125,13 @@ tail -20 "$APPDATA/KukiaCode/logs/kukia.log"
 # 4. base sembrada
 python -c "import sqlite3,os;c=sqlite3.connect(os.path.expandvars(r'%APPDATA%\\KukiaCode\\kukia.db'));print(c.execute('select count(*) from agent_policies').fetchone())"
 ```
+
+## 04/11/2026 15:38 — binario corregido y publicado
+
+- `build-20261104-1538`: exe de 12.908.032 B, SHA-256 `d50b1791...f443cf1a`, compilado con
+  `npx tauri build --no-bundle` y **verificado abriendo la ventana**: interfaz completa y cabecera
+  `v0.1.0 · Fase 3 · build 2026-11-04 15:38`.
+- `build-20261104-1346` queda marcado **NO USAR** en GitHub (exe en modo dev).
+- El instalador NSIS de este build no se ha generado todavia (se compilo con `--no-bundle`).
+- Sigue pendiente: vista CLOUD CREDENTIALS (alta/prueba/revocacion) y M0-B (necesita credenciales
+  del worker `DESKTOP-6CK4U6H`).
