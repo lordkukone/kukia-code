@@ -71,6 +71,13 @@ pub fn argumentos(cfg: &LocalGpuCfg, perfil: Perfil) -> Result<Vec<String>, Stri
     }
     a.push("-c".into());
     a.push(cfg.ctx.to_string());
+    // KV a q8_0 cuando se busca contexto muy largo.
+    if cfg.kv_q8 {
+        a.push("-ctk".into());
+        a.push("q8_0".into());
+        a.push("-ctv".into());
+        a.push("q8_0".into());
+    }
     a.push("--host".into());
     a.push(HOST.into());
     a.push("--port".into());
@@ -179,5 +186,14 @@ mod tests {
         c.ngl = 0;
         let a = argumentos(&c, Perfil::SoloI9).unwrap();
         assert!(!a.iter().any(|x| x == "-ngl"), "no debe forzar -ngl: {a:?}");
+    }
+
+    #[test]
+    fn kv_q8_anade_las_banderas_de_cache() {
+        let mut c = cfg_base();
+        c.kv_q8 = true;
+        let a = argumentos(&c, Perfil::SoloI9).unwrap();
+        assert!(a.iter().any(|x| x == "-ctk"), "falta -ctk: {a:?}");
+        assert!(a.windows(2).any(|w| w[0] == "-ctv" && w[1] == "q8_0"));
     }
 }

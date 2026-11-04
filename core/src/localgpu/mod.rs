@@ -65,6 +65,8 @@ pub struct LocalGpuCfg {
     pub puerto: u16,
     pub ctx: u32,
     pub ngl: u32,
+    /// KV en q8_0: la mitad de memoria, necesario para pasar de 131k de contexto.
+    pub kv_q8: bool,
     /// Proporciones por GPU; para 2 GPUs se usan los dos primeros valores.
     pub tensor_split: Vec<u32>,
     pub rpc_host: String,
@@ -84,6 +86,7 @@ impl Default for LocalGpuCfg {
             puerto: 8080,
             ctx: 8192,
             ngl: 0, // 0 = que llama.cpp reparta las capas (necesario para contexto grande)
+            kv_q8: false,
             tensor_split: vec![35, 40, 25],
             rpc_host: "192.168.50.2:50052".into(),
             vram_i7_gb: 8.0,
